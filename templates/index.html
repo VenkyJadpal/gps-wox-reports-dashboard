@@ -886,7 +886,10 @@
         tabReports.addEventListener('click', () => switchTab('reports'));
         tabCrossref.addEventListener('click', () => switchTab('crossref'));
         tabSimConsolidated.addEventListener('click', () => switchTab('simconsolidated'));
-        tabSimInsight.addEventListener('click', () => switchTab('siminsight'));
+        tabSimInsight.addEventListener('click', () => {
+            switchTab('siminsight');
+            loadSimInsightProjects();
+        });
 
         // Set default dates (last 7 days)
         const today = new Date();
