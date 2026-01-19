@@ -11,8 +11,10 @@ from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
 
-from flask import Flask, render_template, request, jsonify, send_file, Response
+from flask import Flask, render_template, request, jsonify, send_file, Response, session, redirect, url_for, flash
 from dotenv import load_dotenv
+from functools import wraps
+import secrets
 
 try:
     import paramiko
@@ -30,6 +32,13 @@ except ImportError as e:
 from config import PROJECTS, REPORTS
 
 app = Flask(__name__)
+
+# Session configuration
+app.secret_key = secrets.token_hex(32)
+
+# Hardcoded credentials (no database required)
+ADMIN_EMAIL = "admin@wakecap.com"
+ADMIN_PASSWORD = "wakecap@2026!"
 
 
 def load_config():
@@ -516,13 +525,53 @@ def export_to_pdf(columns, data, title="Report"):
     return output
 
 
+def login_required(f):
+    """Decorator to require authentication for routes."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Handle user login."""
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip()
+        password = request.form.get('password', '')
+        
+        if email == ADMIN_EMAIL and password == ADMIN_PASSWORD:
+            session['logged_in'] = True
+            session['user_email'] = email
+            return redirect(url_for('index'))
+        else:
+            return render_template('login.html', error='Invalid email or password')
+    
+    # If already logged in, redirect to dashboard
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    """Handle user logout."""
+    session.clear()
+    return redirect(url_for('login'))
+
+
 @app.route('/')
+@login_required
 def index():
     """Render the main dashboard."""
     return render_template('index.html', projects=PROJECTS)
 
 
 @app.route('/api/reports/<project_email>')
+@login_required
 def get_reports(project_email):
     """Get available reports for a project."""
     reports = REPORTS.get(project_email, [])
@@ -594,6 +643,7 @@ def debug_vehicle_status(project_email):
 
 
 @app.route('/api/generate', methods=['POST'])
+@login_required
 def generate_report():
     """Generate and download a report."""
     data = request.json
@@ -647,6 +697,7 @@ def generate_report():
 
 
 @app.route('/api/preview', methods=['POST'])
+@login_required
 def preview_report():
     """Preview report data with pagination."""
     data = request.json

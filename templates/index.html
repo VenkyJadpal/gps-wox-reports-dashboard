@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -37,6 +38,7 @@
             --border: rgba(0, 0, 0, 0.1);
             --ring: #030213;
         }
+
         .dark {
             --background: #0a0a0a;
             --foreground: #fafafa;
@@ -47,10 +49,12 @@
             --border: rgba(255, 255, 255, 0.1);
             --ring: #fafafa;
         }
+
         body {
             background-color: var(--background);
             color: var(--foreground);
         }
+
         .loader {
             border: 2px solid var(--muted);
             border-top: 2px solid var(--primary);
@@ -59,38 +63,68 @@
             height: 20px;
             animation: spin 0.8s linear infinite;
         }
+
         @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
         }
-        select, input[type="date"] {
+
+        select,
+        input[type="date"] {
             background-color: var(--secondary);
             border-color: var(--border);
             color: var(--foreground);
         }
-        select:focus, input[type="date"]:focus {
+
+        select:focus,
+        input[type="date"]:focus {
             outline: none;
             ring: 2px;
             ring-color: var(--ring);
         }
     </style>
 </head>
+
 <body class="min-h-screen transition-colors duration-200">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
         <!-- Header -->
         <div class="flex items-center justify-between mb-8">
             <div>
-                <h1 class="text-2xl sm:text-3xl font-medium" style="color: var(--foreground);">GPS Reports Dashboard</h1>
-                <p class="mt-2 text-sm" style="color: var(--muted-foreground);">Extract and download reports from the database</p>
+                <h1 class="text-2xl sm:text-3xl font-medium" style="color: var(--foreground);">GPS Reports Dashboard
+                </h1>
+                <p class="mt-2 text-sm" style="color: var(--muted-foreground);">Extract and download reports from the
+                    database</p>
             </div>
-            <button id="theme-toggle" class="p-2 rounded-lg transition-colors" style="background: var(--secondary);" title="Toggle theme">
-                <svg id="sun-icon" class="w-5 h-5 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
-                </svg>
-                <svg id="moon-icon" class="w-5 h-5 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
-                </svg>
-            </button>
+            <div class="flex items-center gap-2">
+                <a href="/logout"
+                    class="inline-flex items-center px-3 py-2 text-sm font-medium rounded-lg transition-colors"
+                    style="background: var(--secondary); color: var(--foreground); border: 1px solid var(--border);"
+                    title="Logout">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                    Logout
+                </a>
+                <button id="theme-toggle" class="p-2 rounded-lg transition-colors" style="background: var(--secondary);"
+                    title="Toggle theme">
+                    <svg id="sun-icon" class="w-5 h-5 hidden dark:block" fill="none" stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                    </svg>
+                    <svg id="moon-icon" class="w-5 h-5 block dark:hidden" fill="none" stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                    </svg>
+                </button>
+            </div>
         </div>
 
         <!-- Main Card -->
@@ -99,8 +133,10 @@
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6">
                 <!-- Project Selector -->
                 <div class="space-y-2">
-                    <label for="project" class="block text-sm font-medium" style="color: var(--foreground);">Project</label>
-                    <select id="project" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <label for="project" class="block text-sm font-medium"
+                        style="color: var(--foreground);">Project</label>
+                    <select id="project" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
                         <option value="">Select a project</option>
                         {% for email, info in projects.items() %}
                         <option value="{{ email }}">{{ info.name }}</option>
@@ -110,36 +146,50 @@
 
                 <!-- Report Type Selector -->
                 <div class="space-y-2">
-                    <label for="report" class="block text-sm font-medium" style="color: var(--foreground);">Report Type</label>
-                    <select id="report" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50" style="background: var(--secondary); border: 1px solid var(--border);" disabled>
+                    <label for="report" class="block text-sm font-medium" style="color: var(--foreground);">Report
+                        Type</label>
+                    <select id="report"
+                        class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50"
+                        style="background: var(--secondary); border: 1px solid var(--border);" disabled>
                         <option value="">Select a project first</option>
                     </select>
                 </div>
 
                 <!-- Start Date -->
                 <div class="space-y-2">
-                    <label for="start_date" class="block text-sm font-medium" style="color: var(--foreground);">Start Date</label>
-                    <input type="date" id="start_date" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <label for="start_date" class="block text-sm font-medium" style="color: var(--foreground);">Start
+                        Date</label>
+                    <input type="date" id="start_date" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
                 </div>
 
                 <!-- End Date -->
                 <div class="space-y-2">
-                    <label for="end_date" class="block text-sm font-medium" style="color: var(--foreground);">End Date</label>
-                    <input type="date" id="end_date" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <label for="end_date" class="block text-sm font-medium" style="color: var(--foreground);">End
+                        Date</label>
+                    <input type="date" id="end_date" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
                 </div>
             </div>
 
             <!-- Report Description -->
-            <div id="report-description" class="hidden mb-6 p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
-                <p class="text-sm" style="color: var(--muted-foreground);"><span class="font-medium" style="color: var(--foreground);">Description:</span> <span id="description-text"></span></p>
+            <div id="report-description" class="hidden mb-6 p-4 rounded-lg"
+                style="background: var(--secondary); border: 1px solid var(--border);">
+                <p class="text-sm" style="color: var(--muted-foreground);"><span class="font-medium"
+                        style="color: var(--foreground);">Description:</span> <span id="description-text"></span></p>
             </div>
 
             <!-- Action Buttons -->
             <div class="flex flex-wrap items-center gap-3 mb-6">
-                <button id="btn-preview" class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); color: var(--foreground); border: 1px solid var(--border);" disabled>
+                <button id="btn-preview"
+                    class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    style="background: var(--secondary); color: var(--foreground); border: 1px solid var(--border);"
+                    disabled>
                     <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                     </svg>
                     Preview
                 </button>
@@ -148,21 +198,30 @@
 
                 <span class="text-sm" style="color: var(--muted-foreground);">Download:</span>
                 <div class="flex gap-2">
-                    <button id="btn-csv" class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    <button id="btn-csv"
+                        class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled>
                         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                         CSV
                     </button>
-                    <button id="btn-excel" class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    <button id="btn-excel"
+                        class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled>
                         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                         Excel
                     </button>
-                    <button id="btn-pdf" class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                    <button id="btn-pdf"
+                        class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled>
                         <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                         </svg>
                         PDF
                     </button>
@@ -176,12 +235,16 @@
             </div>
 
             <!-- Error Message -->
-            <div id="error" class="hidden mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+            <div id="error"
+                class="hidden mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
                 <div class="flex items-center">
-                    <svg class="w-4 h-4 mr-2 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    <svg class="w-4 h-4 mr-2 text-red-600 dark:text-red-400" fill="none" stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <p class="text-sm text-red-800 dark:text-red-200"><span class="font-medium">Error:</span> <span id="error-text"></span></p>
+                    <p class="text-sm text-red-800 dark:text-red-200"><span class="font-medium">Error:</span> <span
+                            id="error-text"></span></p>
                 </div>
             </div>
 
@@ -207,33 +270,50 @@
                         <span id="pagination-info"></span>
                     </div>
                     <div class="flex items-center gap-2">
-                        <button id="btn-first" class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); border: 1px solid var(--border);" title="First page">
+                        <button id="btn-first"
+                            class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            style="background: var(--secondary); border: 1px solid var(--border);" title="First page">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M11 19l-7-7 7-7m8 14l-7-7 7-7" />
                             </svg>
                         </button>
-                        <button id="btn-prev" class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); border: 1px solid var(--border);" title="Previous page">
+                        <button id="btn-prev"
+                            class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            style="background: var(--secondary); border: 1px solid var(--border);"
+                            title="Previous page">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M15 19l-7-7 7-7" />
                             </svg>
                         </button>
                         <div class="flex items-center gap-1">
                             <span class="text-sm" style="color: var(--muted-foreground);">Page</span>
-                            <input type="number" id="page-input" min="1" class="w-16 px-2 py-1 text-sm text-center rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
-                            <span class="text-sm" style="color: var(--muted-foreground);">of <span id="total-pages">1</span></span>
+                            <input type="number" id="page-input" min="1"
+                                class="w-16 px-2 py-1 text-sm text-center rounded-lg"
+                                style="background: var(--secondary); border: 1px solid var(--border);">
+                            <span class="text-sm" style="color: var(--muted-foreground);">of <span
+                                    id="total-pages">1</span></span>
                         </div>
-                        <button id="btn-next" class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); border: 1px solid var(--border);" title="Next page">
+                        <button id="btn-next"
+                            class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            style="background: var(--secondary); border: 1px solid var(--border);" title="Next page">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M9 5l7 7-7 7" />
                             </svg>
                         </button>
-                        <button id="btn-last" class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); border: 1px solid var(--border);" title="Last page">
+                        <button id="btn-last"
+                            class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            style="background: var(--secondary); border: 1px solid var(--border);" title="Last page">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M13 5l7 7-7 7M5 5l7 7-7 7" />
                             </svg>
                         </button>
                         <div class="h-6 w-px mx-1" style="background: var(--border);"></div>
-                        <select id="page-size" class="px-2 py-1 text-sm rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                        <select id="page-size" class="px-2 py-1 text-sm rounded-lg"
+                            style="background: var(--secondary); border: 1px solid var(--border);">
                             <option value="10">10 / page</option>
                             <option value="25">25 / page</option>
                             <option value="50" selected>50 / page</option>
@@ -537,4 +617,5 @@
         }
     </script>
 </body>
+
 </html>
