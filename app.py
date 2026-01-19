@@ -696,6 +696,172 @@ def generate_report():
     return jsonify({'error': 'Invalid format'}), 400
 
 
+@app.route('/api/cross-reference')
+@login_required
+def get_cross_reference():
+    """Get cross-reference device data with optional project filtering."""
+    import json as json_module
+
+    project_filter = request.args.get('project')  # Optional project email filter
+
+    try:
+        # Load unified device data from JSON
+        json_path = Path(__file__).parent / "unified_devices.json"
+        if not json_path.exists():
+            return jsonify({'error': 'Device data file not found. Run update_device_data.py first.'}), 404
+
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json_module.load(f)
+
+        all_devices = data.get('devices', [])
+        statistics = data.get('statistics', {})
+
+        # Filter by project if specified
+        if project_filter:
+            devices = [d for d in all_devices if d.get('project_email') == project_filter]
+        else:
+            devices = all_devices
+
+        # Get list of available projects
+        available_projects = {}
+        for project, count in statistics.get('by_project', {}).items():
+            if project != 'Unassigned':
+                # Find the email for this project name
+                for d in all_devices:
+                    if d.get('project_name') == project and d.get('project_email'):
+                        available_projects[d['project_email']] = project
+                        break
+
+        return jsonify({
+            'devices': devices,
+            'total': len(devices),
+            'filtered_by': project_filter,
+            'available_projects': available_projects,
+            'statistics': statistics,
+            'generated_at': data.get('generated_at', '')
+        })
+
+    except FileNotFoundError:
+        return jsonify({'error': 'Device data file not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/sim-insight')
+@login_required
+def get_sim_insight():
+    """Get SIM insight data with usage information grouped by project."""
+    import json as json_module
+
+    project_filter = request.args.get('project')  # Optional project email filter
+
+    try:
+        # Load unified device data from JSON
+        json_path = Path(__file__).parent / "unified_devices.json"
+        if not json_path.exists():
+            return jsonify({'error': 'Device data file not found. Run update_device_data.py first.'}), 404
+
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json_module.load(f)
+
+        # Load traffic data if available
+        traffic_path = Path(__file__).parent / "sim_traffic_data.json"
+        traffic_data = {}
+        data_limit_mb = 30  # Default 30MB limit
+        if traffic_path.exists():
+            with open(traffic_path, 'r', encoding='utf-8') as f:
+                traffic_json = json_module.load(f)
+                traffic_data = traffic_json.get('traffic', {})
+                data_limit_mb = traffic_json.get('data_limit_mb', 30)
+
+        all_devices = data.get('devices', [])
+
+        # Filter to devices with SIM data (ICCID present)
+        sim_devices = [d for d in all_devices if d.get('iccid')]
+
+        # Merge traffic data with each device
+        for device in sim_devices:
+            iccid = device.get('iccid', '')
+            if iccid in traffic_data:
+                device['data_used_mb'] = traffic_data[iccid].get('total_data_mb', 0)
+                device['data_used_kb'] = traffic_data[iccid].get('total_data_kb', 0)
+            else:
+                device['data_used_mb'] = 0
+                device['data_used_kb'] = 0
+
+        # Filter by project if specified
+        if project_filter:
+            sim_devices = [d for d in sim_devices if d.get('project_email') == project_filter]
+
+        # Group by project for summary statistics
+        project_summary = {}
+        provider_summary = {}
+
+        for device in sim_devices:
+            project = device.get('project_name') or 'Unassigned'
+            provider = device.get('sim_provider') or 'Unknown'
+
+            # Project summary
+            if project not in project_summary:
+                project_summary[project] = {
+                    'project_email': device.get('project_email', ''),
+                    'total_sims': 0,
+                    'active': 0,
+                    'online': 0,
+                    'offline': 0,
+                    'by_provider': {}
+                }
+            project_summary[project]['total_sims'] += 1
+            if device.get('sim_status') == 'Active':
+                project_summary[project]['active'] += 1
+            if device.get('status') == 'Online':
+                project_summary[project]['online'] += 1
+            elif device.get('status') in ['Offline', 'Inactive']:
+                project_summary[project]['offline'] += 1
+
+            # Provider counts per project
+            if provider not in project_summary[project]['by_provider']:
+                project_summary[project]['by_provider'][provider] = 0
+            project_summary[project]['by_provider'][provider] += 1
+
+            # Overall provider summary
+            if provider not in provider_summary:
+                provider_summary[provider] = {
+                    'total': 0,
+                    'active': 0,
+                    'by_status': {'Online': 0, 'Recent': 0, 'Offline': 0, 'Inactive': 0}
+                }
+            provider_summary[provider]['total'] += 1
+            if device.get('sim_status') == 'Active':
+                provider_summary[provider]['active'] += 1
+            status = device.get('status', 'Unknown')
+            if status in provider_summary[provider]['by_status']:
+                provider_summary[provider]['by_status'][status] += 1
+
+        # Get list of available projects (that have SIM data)
+        available_projects = {}
+        for device in all_devices:
+            if device.get('iccid') and device.get('project_email') and device.get('project_name'):
+                if device['project_email'] not in available_projects:
+                    available_projects[device['project_email']] = device['project_name']
+
+        return jsonify({
+            'devices': sim_devices,
+            'total': len(sim_devices),
+            'filtered_by': project_filter,
+            'available_projects': available_projects,
+            'project_summary': project_summary,
+            'provider_summary': provider_summary,
+            'data_limit_mb': data_limit_mb,
+            'generated_at': data.get('generated_at', '')
+        })
+
+    except FileNotFoundError:
+        return jsonify({'error': 'Device data file not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/preview', methods=['POST'])
 @login_required
 def preview_report():

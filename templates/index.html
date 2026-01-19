@@ -127,8 +127,31 @@
             </div>
         </div>
 
-        <!-- Main Card -->
-        <div class="rounded-xl shadow-sm p-6" style="background: var(--background); border: 1px solid var(--border);">
+        <!-- Tab Navigation -->
+        <div class="mb-6">
+            <div class="flex gap-2 border-b" style="border-color: var(--border);">
+                <button id="tab-reports" class="tab-button active px-6 py-3 font-medium text-sm transition-colors"
+                    style="border-bottom: 2px solid var(--primary); color: var(--primary);">
+                    Reports
+                </button>
+                <button id="tab-crossref" class="tab-button px-6 py-3 font-medium text-sm transition-colors"
+                    style="color: var(--muted-foreground);">
+                    Cross-reference
+                </button>
+                <button id="tab-simconsolidated" class="tab-button px-6 py-3 font-medium text-sm transition-colors"
+                    style="color: var(--muted-foreground);">
+                    SIM Consolidated
+                </button>
+                <button id="tab-siminsight" class="tab-button px-6 py-3 font-medium text-sm transition-colors"
+                    style="color: var(--muted-foreground);">
+                    SIM Insight
+                </button>
+            </div>
+        </div>
+
+        <!-- Reports Tab Content -->
+        <div id="reports-content" class="tab-content rounded-xl shadow-sm p-6"
+            style="background: var(--background); border: 1px solid var(--border);">
             <!-- Form Grid -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6">
                 <!-- Project Selector -->
@@ -324,6 +347,417 @@
             </div>
         </div>
 
+        <!-- Cross-reference Tab Content -->
+        <div id="crossref-content" class="tab-content hidden rounded-xl shadow-sm p-6"
+            style="background: var(--background); border: 1px solid var(--border);">
+            <div class="mb-6">
+                <h2 class="text-xl font-medium mb-4" style="color: var(--foreground);">Unified Device Cross-Reference
+                </h2>
+                <div class="flex gap-4 items-center">
+                    <div class="flex-1">
+                        <label for="crossref-project" class="block text-sm font-medium mb-2"
+                            style="color: var(--foreground);">Filter by Project</label>
+                        <select id="crossref-project" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors"
+                            style="background: var(--secondary); border: 1px solid var(--border);">
+                            <option value="">All Projects</option>
+                            {% for email, info in projects.items() %}
+                            <option value="{{ email }}">{{ info.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="flex items-end">
+                        <button id="btn-load-crossref"
+                            class="inline-flex items-center px-4 py-2.5 text-sm font-medium rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition-colors">
+                            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Load Data
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading Indicator -->
+            <div id="crossref-loading" class="hidden flex items-center justify-center py-12">
+                <div class="loader mr-3"></div>
+                <span class="text-sm" style="color: var(--muted-foreground);">Loading cross-reference data...</span>
+            </div>
+
+            <!-- Error Message -->
+            <div id="crossref-error"
+                class="hidden mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                <div class="flex items-center">
+                    <svg class="w-4 h-4 mr-2 text-red-600 dark:text-red-400" fill="none" stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p class="text-sm text-red-800 dark:text-red-200"><span class="font-medium">Error:</span> <span
+                            id="crossref-error-text"></span></p>
+                </div>
+            </div>
+
+            <!-- Cross-reference Filters -->
+            <div id="crossref-filters"
+                class="hidden grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4 mb-6">
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">Search</label>
+                    <input type="text" id="cr-search" placeholder="IMEI, name, ICCID..."
+                        class="w-full px-3 py-2 rounded-lg text-sm transition-colors"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">Status</label>
+                    <select id="cr-status" class="w-full px-3 py-2 rounded-lg text-sm"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">All Status</option>
+                        <option value="online">Online (24h)</option>
+                        <option value="recent">Recent (30d)</option>
+                        <option value="offline">Offline</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">SIM Provider</label>
+                    <select id="cr-sim" class="w-full px-3 py-2 rounded-lg text-sm"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">All Providers</option>
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">Config</label>
+                    <select id="cr-config" class="w-full px-3 py-2 rounded-lg text-sm"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">All Configs</option>
+                        <option value="correct">Correct</option>
+                        <option value="wrong">Wrong</option>
+                        <option value="none">None</option>
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">SIM Data</label>
+                    <select id="cr-simdata" class="w-full px-3 py-2 rounded-lg text-sm"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">All SIM Data</option>
+                        <option value="yes">Has SIM Data</option>
+                        <option value="no">No SIM Data</option>
+                    </select>
+                </div>
+                <!-- Hidden GPSWox filter for backwards compatibility -->
+                <select id="cr-gpswox" class="hidden">
+                    <option value="">All GPSWox</option>
+                </select>
+            </div>
+
+            <!-- Statistics Cards -->
+            <div id="cr-stats-cards" class="hidden grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- Provider Statistics Grid -->
+            <div id="cr-provider-grid" class="hidden grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- Actions row -->
+            <div id="cr-actions" class="hidden flex justify-between items-center mb-4">
+                <div class="text-sm" style="color: var(--muted-foreground);">
+                    Showing <span id="crossref-visible" class="font-bold">0</span> of <span id="crossref-total"
+                        class="font-bold">0</span> devices
+                </div>
+                <button id="btn-export-crossref"
+                    class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition-colors">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Export CSV
+                </button>
+            </div>
+
+            <!-- Cross-reference Table -->
+            <div id="crossref-table-container" class="hidden overflow-x-auto rounded-lg"
+                style="border: 1px solid var(--border);">
+                <table id="crossref-table" class="min-w-full divide-y" style="border-color: var(--border);">
+                    <thead id="crossref-header" style="background: var(--secondary);">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">#</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">IMEI</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Model</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Project</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Group</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Status</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Config</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">SIM Provider</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">ICCID</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="crossref-body" class="divide-y" style="border-color: var(--border);">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- SIM Consolidated Tab Content -->
+        <div id="simconsolidated-content" class="tab-content hidden rounded-xl shadow-sm p-6"
+            style="background: var(--background); border: 1px solid var(--border);">
+            <div class="mb-6">
+                <h2 class="text-xl font-medium mb-4" style="color: var(--foreground);">SIM Consolidated Dashboard</h2>
+                <div class="flex gap-4 items-center">
+                    <div class="flex items-end">
+                        <button id="btn-load-simconsolidated"
+                            class="inline-flex items-center px-4 py-2.5 text-sm font-medium rounded-lg text-white bg-purple-600 hover:bg-purple-700 transition-colors">
+                            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Load Data
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading Indicator -->
+            <div id="simconsolidated-loading" class="hidden flex items-center justify-center py-12">
+                <div class="loader mr-3"></div>
+                <span class="text-sm" style="color: var(--muted-foreground);">Loading consolidated SIM data...</span>
+            </div>
+
+            <!-- Error Message -->
+            <div id="simconsolidated-error"
+                class="hidden mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                <div class="flex items-center">
+                    <svg class="w-4 h-4 mr-2 text-red-600 dark:text-red-400" fill="none" stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p class="text-sm text-red-800 dark:text-red-200"><span class="font-medium">Error:</span> <span
+                            id="simconsolidated-error-text"></span></p>
+                </div>
+            </div>
+
+            <!-- Provider Summary Cards -->
+            <div id="sc-provider-cards" class="hidden grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 mb-6">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- Project Summary Table -->
+            <div id="sc-project-summary" class="hidden mb-6">
+                <h3 class="text-lg font-medium mb-3" style="color: var(--foreground);">SIMs by Project</h3>
+                <div class="overflow-x-auto rounded-lg" style="border: 1px solid var(--border);">
+                    <table class="min-w-full divide-y" style="border-color: var(--border);">
+                        <thead style="background: var(--secondary);">
+                            <tr>
+                                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                    style="color: var(--muted-foreground);">Project</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider"
+                                    style="color: var(--muted-foreground);">Total SIMs</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider"
+                                    style="color: var(--muted-foreground);">Active</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider"
+                                    style="color: var(--muted-foreground);">Online</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider"
+                                    style="color: var(--muted-foreground);">Offline</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider"
+                                    style="color: var(--muted-foreground);">Data Used</th>
+                                <th class="px-4 py-3 text-center text-xs font-medium uppercase tracking-wider"
+                                    style="color: var(--muted-foreground);">Over Limit</th>
+                                <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                    style="color: var(--muted-foreground);">By Provider</th>
+                            </tr>
+                        </thead>
+                        <tbody id="sc-project-body" class="divide-y" style="border-color: var(--border);">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- SIM Insight Tab Content -->
+        <div id="siminsight-content" class="tab-content hidden rounded-xl shadow-sm p-6"
+            style="background: var(--background); border: 1px solid var(--border);">
+            <div class="mb-6">
+                <h2 class="text-xl font-medium mb-4" style="color: var(--foreground);">SIM Insight - Project Details</h2>
+                <div class="flex gap-4 items-center">
+                    <div class="flex-1">
+                        <label for="siminsight-project" class="block text-sm font-medium mb-2"
+                            style="color: var(--foreground);">Select Project</label>
+                        <select id="siminsight-project" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors"
+                            style="background: var(--secondary); border: 1px solid var(--border);">
+                            <option value="">-- Select a Project --</option>
+                        </select>
+                    </div>
+                    <div class="flex items-end">
+                        <button id="btn-load-siminsight"
+                            class="inline-flex items-center px-4 py-2.5 text-sm font-medium rounded-lg text-white bg-purple-600 hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled>
+                            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                            Load Data
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading Indicator -->
+            <div id="siminsight-loading" class="hidden flex items-center justify-center py-12">
+                <div class="loader mr-3"></div>
+                <span class="text-sm" style="color: var(--muted-foreground);">Loading SIM insight data...</span>
+            </div>
+
+            <!-- Error Message -->
+            <div id="siminsight-error"
+                class="hidden mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                <div class="flex items-center">
+                    <svg class="w-4 h-4 mr-2 text-red-600 dark:text-red-400" fill="none" stroke="currentColor"
+                        viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <p class="text-sm text-red-800 dark:text-red-200"><span class="font-medium">Error:</span> <span
+                            id="siminsight-error-text"></span></p>
+                </div>
+            </div>
+
+            <!-- Project Info Message -->
+            <div id="si-select-project-msg" class="flex items-center justify-center py-12">
+                <div class="text-center">
+                    <svg class="w-12 h-12 mx-auto mb-4" style="color: var(--muted-foreground);" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                            d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    </svg>
+                    <p class="text-sm" style="color: var(--muted-foreground);">Select a project from the dropdown to view individual SIM details</p>
+                </div>
+            </div>
+
+            <!-- Project Stats Cards -->
+            <div id="si-project-stats" class="hidden grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mb-6">
+                <!-- Populated by JS -->
+            </div>
+
+            <!-- Filters -->
+            <div id="si-filters" class="hidden grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">Search</label>
+                    <input type="text" id="si-search" placeholder="IMEI, ICCID, MSISDN..."
+                        class="w-full px-3 py-2 rounded-lg text-sm transition-colors"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">Status</label>
+                    <select id="si-status" class="w-full px-3 py-2 rounded-lg text-sm"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">All Status</option>
+                        <option value="online">Online</option>
+                        <option value="recent">Recent</option>
+                        <option value="offline">Offline</option>
+                        <option value="inactive">Inactive</option>
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">SIM Provider</label>
+                    <select id="si-provider" class="w-full px-3 py-2 rounded-lg text-sm"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">All Providers</option>
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">SIM Status</label>
+                    <select id="si-simstatus" class="w-full px-3 py-2 rounded-lg text-sm"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">All SIM Status</option>
+                        <option value="Active">Active</option>
+                        <option value="Inactive">Inactive</option>
+                    </select>
+                </div>
+                <div class="space-y-2">
+                    <label class="block text-xs font-medium uppercase tracking-wider"
+                        style="color: var(--muted-foreground);">Data Usage</label>
+                    <select id="si-datausage" class="w-full px-3 py-2 rounded-lg text-sm"
+                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">All Usage</option>
+                        <option value="over">Over Limit (&gt;30MB)</option>
+                        <option value="high">High (20-30MB)</option>
+                        <option value="normal">Normal (&lt;20MB)</option>
+                        <option value="zero">No Usage (0MB)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Actions row -->
+            <div id="si-actions" class="hidden flex justify-between items-center mb-4">
+                <div class="text-sm" style="color: var(--muted-foreground);">
+                    Showing <span id="siminsight-visible" class="font-bold">0</span> of <span id="siminsight-total"
+                        class="font-bold">0</span> SIMs
+                </div>
+                <button id="btn-export-siminsight"
+                    class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-purple-600 hover:bg-purple-700 transition-colors">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Export CSV
+                </button>
+            </div>
+
+            <!-- SIM Details Table -->
+            <div id="siminsight-table-container" class="hidden overflow-x-auto rounded-lg"
+                style="border: 1px solid var(--border);">
+                <table id="siminsight-table" class="min-w-full divide-y" style="border-color: var(--border);">
+                    <thead style="background: var(--secondary);">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">#</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">IMEI</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Device Name</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Device Status</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Data Used</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">SIM Provider</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">SIM Status</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">ICCID</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">MSISDN</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider"
+                                style="color: var(--muted-foreground);">Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody id="siminsight-body" class="divide-y" style="border-color: var(--border);">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
         <!-- Footer -->
         <div class="mt-8 text-center text-sm" style="color: var(--muted-foreground);">
             <p>GPS Reports Dashboard</p>
@@ -338,6 +772,8 @@
         let currentPage = 1;
         let pageSize = 50;
         let isDark = false;
+        let activeTab = 'reports';
+        let crossrefDevices = [];
 
         // Elements
         const projectSelect = document.getElementById('project');
@@ -369,11 +805,88 @@
         const pageSizeSelect = document.getElementById('page-size');
         const paginationInfo = document.getElementById('pagination-info');
 
+        // Tab elements
+        const tabReports = document.getElementById('tab-reports');
+        const tabCrossref = document.getElementById('tab-crossref');
+        const tabSimConsolidated = document.getElementById('tab-simconsolidated');
+        const tabSimInsight = document.getElementById('tab-siminsight');
+        const reportsContent = document.getElementById('reports-content');
+        const crossrefContent = document.getElementById('crossref-content');
+        const simconsolidatedContent = document.getElementById('simconsolidated-content');
+        const siminsightContent = document.getElementById('siminsight-content');
+
+        // Cross-reference elements
+        const crossrefProject = document.getElementById('crossref-project');
+        const btnLoadCrossref = document.getElementById('btn-load-crossref');
+        const crossrefLoading = document.getElementById('crossref-loading');
+        const crossrefError = document.getElementById('crossref-error');
+        const crossrefErrorText = document.getElementById('crossref-error-text');
+        const crossrefVisible = document.getElementById('crossref-visible');
+        const crossrefTotal = document.getElementById('crossref-total');
+        const crossrefTableContainer = document.getElementById('crossref-table-container');
+        const crossrefBody = document.getElementById('crossref-body');
+        const crStatsCards = document.getElementById('cr-stats-cards');
+        let crossrefStats = {};
+
+        // Filter elements
+        const crSearch = document.getElementById('cr-search');
+        const crStatus = document.getElementById('cr-status');
+        const crGpswox = document.getElementById('cr-gpswox');
+        const crSim = document.getElementById('cr-sim');
+        const crConfig = document.getElementById('cr-config');
+        const crSimData = document.getElementById('cr-simdata');
+        const crFilters = document.getElementById('crossref-filters');
+        const crProviderGrid = document.getElementById('cr-provider-grid');
+        const crActions = document.getElementById('cr-actions');
+        const btnExportCrossref = document.getElementById('btn-export-crossref');
+
         // Theme toggle
         themeToggle.addEventListener('click', () => {
             isDark = !isDark;
             document.documentElement.classList.toggle('dark', isDark);
         });
+
+        // Tab switching
+        function switchTab(tab) {
+            activeTab = tab;
+            // Reset all tabs
+            [tabReports, tabCrossref, tabSimConsolidated, tabSimInsight].forEach(t => {
+                t.classList.remove('active');
+                t.style.borderBottom = 'none';
+                t.style.color = 'var(--muted-foreground)';
+            });
+            [reportsContent, crossrefContent, simconsolidatedContent, siminsightContent].forEach(c => {
+                c.classList.add('hidden');
+            });
+
+            // Activate selected tab
+            if (tab === 'reports') {
+                tabReports.classList.add('active');
+                tabReports.style.borderBottom = '2px solid var(--primary)';
+                tabReports.style.color = 'var(--primary)';
+                reportsContent.classList.remove('hidden');
+            } else if (tab === 'crossref') {
+                tabCrossref.classList.add('active');
+                tabCrossref.style.borderBottom = '2px solid var(--primary)';
+                tabCrossref.style.color = 'var(--primary)';
+                crossrefContent.classList.remove('hidden');
+            } else if (tab === 'simconsolidated') {
+                tabSimConsolidated.classList.add('active');
+                tabSimConsolidated.style.borderBottom = '2px solid var(--primary)';
+                tabSimConsolidated.style.color = 'var(--primary)';
+                simconsolidatedContent.classList.remove('hidden');
+            } else if (tab === 'siminsight') {
+                tabSimInsight.classList.add('active');
+                tabSimInsight.style.borderBottom = '2px solid var(--primary)';
+                tabSimInsight.style.color = 'var(--primary)';
+                siminsightContent.classList.remove('hidden');
+            }
+        }
+
+        tabReports.addEventListener('click', () => switchTab('reports'));
+        tabCrossref.addEventListener('click', () => switchTab('crossref'));
+        tabSimConsolidated.addEventListener('click', () => switchTab('simconsolidated'));
+        tabSimInsight.addEventListener('click', () => switchTab('siminsight'));
 
         // Set default dates (last 7 days)
         const today = new Date();
@@ -613,6 +1126,723 @@
                 showError(err.message);
             } finally {
                 showLoading(false);
+            }
+        }
+
+        // Cross-reference functionality
+        function showCrossrefError(message) {
+            crossrefErrorText.textContent = message;
+            crossrefError.classList.remove('hidden');
+            setTimeout(() => crossrefError.classList.add('hidden'), 5000);
+        }
+
+        function showCrossrefLoading(show) {
+            if (show) {
+                crossrefLoading.classList.remove('hidden');
+            } else {
+                crossrefLoading.classList.add('hidden');
+            }
+        }
+
+        async function loadCrossReference() {
+            showCrossrefLoading(true);
+            crossrefError.classList.add('hidden');
+            crossrefTableContainer.classList.add('hidden');
+            crFilters.classList.add('hidden');
+            crProviderGrid.classList.add('hidden');
+            crStatsCards.classList.add('hidden');
+            crActions.classList.add('hidden');
+
+            const project = crossrefProject.value;
+            const url = project ? `/api/cross-reference?project=${encodeURIComponent(project)}` : '/api/cross-reference';
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load cross-reference data');
+                }
+
+                crossrefDevices = data.devices;
+                crossrefStats = data.statistics || {};
+
+                // Update project dropdown with actual projects from mapping (only on first load)
+                if (data.available_projects && Object.keys(data.available_projects).length > 0 && !project) {
+                    const currentValue = crossrefProject.value;
+                    crossrefProject.innerHTML = '<option value="">All Projects</option>';
+                    Object.entries(data.available_projects)
+                        .sort((a, b) => a[1].localeCompare(b[1]))
+                        .forEach(([email, name]) => {
+                            const opt = document.createElement('option');
+                            opt.value = email;
+                            opt.textContent = name;
+                            crossrefProject.appendChild(opt);
+                        });
+                    crossrefProject.value = currentValue;
+                }
+
+                // Clear filters
+                crSearch.value = '';
+                crStatus.value = '';
+                crGpswox.value = '';
+                crConfig.value = '';
+                crSimData.value = '';
+
+                populateSimProviderDropdown();
+                renderStatsCards();
+                renderCrossrefTable();
+
+                crFilters.classList.remove('hidden');
+                crStatsCards.classList.remove('hidden');
+                crProviderGrid.classList.remove('hidden');
+                crActions.classList.remove('hidden');
+
+            } catch (err) {
+                showCrossrefError(err.message);
+            } finally {
+                showCrossrefLoading(false);
+            }
+        }
+
+        function renderStatsCards() {
+            // Calculate stats from current filtered view
+            const stats = {
+                total: crossrefDevices.length,
+                online: crossrefDevices.filter(d => d.status === 'Online').length,
+                offline: crossrefDevices.filter(d => d.status === 'Offline').length,
+                inactive: crossrefDevices.filter(d => d.status === 'Inactive').length,
+                recent: crossrefDevices.filter(d => d.status === 'Recent').length,
+                correctConfig: crossrefDevices.filter(d => d.config_status === 'Correct').length,
+                wrongConfig: crossrefDevices.filter(d => d.config_status === 'Wrong').length,
+                inGpswox: crossrefDevices.filter(d => d.in_gpswox === 'Yes').length,
+            };
+
+            crStatsCards.innerHTML = `
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-emerald-500">${stats.online.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Online (24h)</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-orange-500">${stats.recent.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Recent (30d)</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-red-500">${stats.offline.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Offline</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold" style="color: var(--muted-foreground);">${stats.inactive.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Inactive</div>
+                </div>
+            `;
+        }
+
+        function populateSimProviderDropdown() {
+            const providers = [...new Set(crossrefDevices.map(d => d.sim_provider))].filter(Boolean).sort();
+            crSim.innerHTML = '<option value="">All Providers</option>';
+            providers.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                crSim.appendChild(opt);
+            });
+        }
+
+        function filterCrossrefTable() {
+            const search = crSearch.value.toLowerCase();
+            const status = crStatus.value;
+            const gpswox = crGpswox.value;
+            const sim = crSim.value;
+            const config = crConfig.value;
+            const simData = crSimData.value;
+
+            const rows = crossrefBody.querySelectorAll('tr');
+            let visible = 0;
+
+            rows.forEach((row) => {
+                const text = row.textContent.toLowerCase();
+                const rowStatus = row.dataset.status;
+                const rowGpswox = row.dataset.gpswox;
+                const rowProvider = row.dataset.provider;
+                const rowConfig = row.dataset.config;
+                const rowSimData = row.dataset.simdata;
+
+                let show = true;
+
+                if (search && !text.includes(search)) show = false;
+                if (status && rowStatus !== status) show = false;
+                if (gpswox && rowGpswox !== gpswox) show = false;
+                if (sim && rowProvider !== sim) show = false;
+                if (config && rowConfig !== config) show = false;
+                if (simData && rowSimData !== simData) show = false;
+
+                row.style.display = show ? '' : 'none';
+                if (show) {
+                    visible++;
+                    row.cells[0].textContent = visible;
+                }
+            });
+
+            crossrefVisible.textContent = visible;
+            updateProviderGrid();
+        }
+
+        function updateProviderGrid() {
+            const providers = {};
+            const rows = crossrefBody.querySelectorAll('tr');
+
+            rows.forEach(row => {
+                if (row.style.display !== 'none') {
+                    const provider = row.dataset.provider || 'Unknown';
+                    providers[provider] = (providers[provider] || 0) + 1;
+                }
+            });
+
+            crProviderGrid.innerHTML = Object.entries(providers)
+                .sort((a, b) => b[1] - a[1])
+                .map(([name, count]) => `
+                    <div class="p-3 rounded-lg text-center transition-colors" style="background: var(--secondary); border: 1px solid var(--border);">
+                        <div class="text-xl font-bold" style="color: var(--foreground);">${count.toLocaleString()}</div>
+                        <div class="text-[10px] uppercase tracking-wider" style="color: var(--muted-foreground);">${name}</div>
+                    </div>
+                `).join('');
+        }
+
+        function exportCrossrefCSV() {
+            const rows = Array.from(crossrefBody.querySelectorAll('tr')).filter(r => r.style.display !== 'none');
+            const headers = Array.from(document.querySelectorAll('#crossref-table thead th')).map(th => th.textContent);
+
+            let csv = headers.join(',') + '\n';
+
+            rows.forEach(row => {
+                const values = Array.from(row.querySelectorAll('td')).map(td => `"${td.textContent.replace(/"/g, '""')}"`);
+                csv += values.join(',') + '\n';
+            });
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'cross_reference_export_' + new Date().toISOString().slice(0, 10) + '.csv';
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        }
+
+        function renderCrossrefTable() {
+            if (crossrefDevices.length === 0) {
+                crossrefBody.innerHTML = `
+                    <tr>
+                        <td colspan="10" class="px-4 py-12 text-center" style="color: var(--muted-foreground);">No devices found</td>
+                    </tr>
+                `;
+            } else {
+                crossrefBody.innerHTML = crossrefDevices.map((device, idx) => {
+                    const statusLower = (device.status || '').toLowerCase();
+                    const hasSimData = device.iccid ? 'yes' : 'no';
+                    const configType = (device.config_status || 'none').toLowerCase();
+                    const projectName = device.project_name || '-';
+                    const deviceGroup = device.device_group || '-';
+                    const configDisplay = device.config || 'None';
+
+                    return `
+                        <tr class="transition-colors hover:opacity-80"
+                            style="background: ${idx % 2 === 0 ? 'var(--background)' : 'var(--secondary)'};"
+                            data-status="${statusLower}"
+                            data-gpswox="${(device.in_gpswox || '').toLowerCase()}"
+                            data-provider="${device.sim_provider || ''}"
+                            data-config="${configType}"
+                            data-simdata="${hasSimData}"
+                            data-project="${device.project_email || ''}">
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--muted-foreground);">${idx + 1}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.imei}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.model}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: ${projectName !== '-' ? '#3b82f6' : 'var(--muted-foreground)'}; font-weight: ${projectName !== '-' ? '500' : 'normal'};">${projectName}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${deviceGroup}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap ${statusLower === 'online' ? 'text-emerald-500 font-bold' : (statusLower === 'recent' ? 'text-orange-500' : (statusLower === 'inactive' ? 'text-gray-400' : 'text-red-500'))}">${device.status}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: ${configType === 'correct' ? '#10b981' : (configType === 'none' ? 'var(--muted-foreground)' : '#ef4444')}" title="${configDisplay}">${configType === 'correct' ? 'Primary' : (configType === 'none' ? 'None' : 'Wrong')}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.sim_provider || '-'}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.iccid || '-'}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.last_seen || '-'}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            crossrefTotal.textContent = crossrefDevices.length;
+            crossrefVisible.textContent = crossrefDevices.length;
+            crossrefTableContainer.classList.remove('hidden');
+            updateProviderGrid();
+        }
+
+        // Filter event listeners
+        [crSearch, crStatus, crGpswox, crSim, crConfig, crSimData].forEach(el => {
+            el.addEventListener('input', filterCrossrefTable);
+            el.addEventListener('change', filterCrossrefTable);
+        });
+
+        btnExportCrossref.addEventListener('click', exportCrossrefCSV);
+        btnLoadCrossref.addEventListener('click', loadCrossReference);
+
+        // ==========================================
+        // SIM Consolidated functionality
+        // ==========================================
+        let simConsolidatedDevices = [];
+        let simConsolidatedProjectSummary = {};
+        let simConsolidatedProviderSummary = {};
+        let dataLimitMb = 30; // Default 30MB limit
+
+        // SIM Consolidated elements
+        const btnLoadSimConsolidated = document.getElementById('btn-load-simconsolidated');
+        const simconsolidatedLoading = document.getElementById('simconsolidated-loading');
+        const simconsolidatedError = document.getElementById('simconsolidated-error');
+        const simconsolidatedErrorText = document.getElementById('simconsolidated-error-text');
+        const scProviderCards = document.getElementById('sc-provider-cards');
+        const scProjectSummary = document.getElementById('sc-project-summary');
+        const scProjectBody = document.getElementById('sc-project-body');
+
+        // ==========================================
+        // SIM Insight functionality
+        // ==========================================
+        let simInsightDevices = [];
+        let simInsightAvailableProjects = {};
+
+        // SIM Insight elements
+        const siminsightProject = document.getElementById('siminsight-project');
+        const btnLoadSimInsight = document.getElementById('btn-load-siminsight');
+        const siminsightLoading = document.getElementById('siminsight-loading');
+        const siminsightError = document.getElementById('siminsight-error');
+        const siminsightErrorText = document.getElementById('siminsight-error-text');
+        const siminsightVisible = document.getElementById('siminsight-visible');
+        const siminsightTotal = document.getElementById('siminsight-total');
+        const siminsightTableContainer = document.getElementById('siminsight-table-container');
+        const siminsightBody = document.getElementById('siminsight-body');
+        const siSelectProjectMsg = document.getElementById('si-select-project-msg');
+        const siProjectStats = document.getElementById('si-project-stats');
+        const siFilters = document.getElementById('si-filters');
+        const siActions = document.getElementById('si-actions');
+        const siSearch = document.getElementById('si-search');
+        const siStatus = document.getElementById('si-status');
+        const siProvider = document.getElementById('si-provider');
+        const siSimStatus = document.getElementById('si-simstatus');
+        const siDataUsage = document.getElementById('si-datausage');
+        const btnExportSimInsight = document.getElementById('btn-export-siminsight');
+
+        // ==========================================
+        // SIM Consolidated Functions
+        // ==========================================
+        function showSimConsolidatedError(message) {
+            simconsolidatedErrorText.textContent = message;
+            simconsolidatedError.classList.remove('hidden');
+            setTimeout(() => simconsolidatedError.classList.add('hidden'), 5000);
+        }
+
+        function showSimConsolidatedLoading(show) {
+            if (show) {
+                simconsolidatedLoading.classList.remove('hidden');
+            } else {
+                simconsolidatedLoading.classList.add('hidden');
+            }
+        }
+
+        async function loadSimConsolidated() {
+            showSimConsolidatedLoading(true);
+            simconsolidatedError.classList.add('hidden');
+            scProviderCards.classList.add('hidden');
+            scProjectSummary.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/sim-insight');
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load consolidated SIM data');
+                }
+
+                simConsolidatedDevices = data.devices;
+                simConsolidatedProjectSummary = data.project_summary || {};
+                simConsolidatedProviderSummary = data.provider_summary || {};
+                dataLimitMb = data.data_limit_mb || 30;
+
+                // Also populate the SIM Insight project dropdown
+                if (data.available_projects && Object.keys(data.available_projects).length > 0) {
+                    simInsightAvailableProjects = data.available_projects;
+                    populateSimInsightProjectDropdown();
+                }
+
+                renderConsolidatedProviderCards();
+                renderConsolidatedProjectSummary();
+
+                scProviderCards.classList.remove('hidden');
+                scProjectSummary.classList.remove('hidden');
+
+            } catch (err) {
+                showSimConsolidatedError(err.message);
+            } finally {
+                showSimConsolidatedLoading(false);
+            }
+        }
+
+        function renderConsolidatedProviderCards() {
+            const providers = Object.entries(simConsolidatedProviderSummary)
+                .sort((a, b) => b[1].total - a[1].total);
+
+            const totalSims = providers.reduce((sum, [, data]) => sum + data.total, 0);
+
+            // Calculate data usage stats
+            const overLimit = simConsolidatedDevices.filter(d => (d.data_used_mb || 0) > dataLimitMb).length;
+            const highUsage = simConsolidatedDevices.filter(d => {
+                const mb = d.data_used_mb || 0;
+                return mb >= 20 && mb <= dataLimitMb;
+            }).length;
+            const totalDataMb = simConsolidatedDevices.reduce((sum, d) => sum + (d.data_used_mb || 0), 0);
+
+            scProviderCards.innerHTML = `
+                <div class="p-4 rounded-lg" style="background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%); border: none;">
+                    <div class="text-3xl font-bold text-white">${totalSims.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider text-purple-200">Total SIMs</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-red-500">${overLimit.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Over ${dataLimitMb}MB Limit</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-amber-500">${highUsage.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">High (20-30MB)</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold" style="color: var(--foreground);">${(totalDataMb / 1024).toFixed(1)} GB</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Total Data Used</div>
+                </div>
+                ${providers.map(([name, data]) => `
+                    <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                        <div class="text-2xl font-bold" style="color: var(--foreground);">${data.total.toLocaleString()}</div>
+                        <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">${name}</div>
+                        <div class="mt-1 text-xs" style="color: var(--muted-foreground);">
+                            <span class="text-emerald-500">${data.by_status.Online || 0} online</span>
+                        </div>
+                    </div>
+                `).join('')}
+            `;
+        }
+
+        function renderConsolidatedProjectSummary() {
+            // Calculate data usage per project
+            const projectDataUsage = {};
+            simConsolidatedDevices.forEach(d => {
+                const project = d.project_name || 'Unassigned';
+                if (!projectDataUsage[project]) {
+                    projectDataUsage[project] = { totalMb: 0, overLimit: 0 };
+                }
+                projectDataUsage[project].totalMb += d.data_used_mb || 0;
+                if ((d.data_used_mb || 0) > dataLimitMb) {
+                    projectDataUsage[project].overLimit++;
+                }
+            });
+
+            const projects = Object.entries(simConsolidatedProjectSummary)
+                .sort((a, b) => b[1].total_sims - a[1].total_sims);
+
+            scProjectBody.innerHTML = projects.map(([name, data], idx) => {
+                const providerBreakdown = Object.entries(data.by_provider || {})
+                    .map(([p, c]) => `${p}: ${c}`)
+                    .join(', ');
+                const projectUsage = projectDataUsage[name] || { totalMb: 0, overLimit: 0 };
+
+                return `
+                    <tr class="transition-colors hover:opacity-80" style="background: ${idx % 2 === 0 ? 'var(--background)' : 'var(--secondary)'};">
+                        <td class="px-4 py-3 text-sm" style="color: ${name !== 'Unassigned' ? '#3b82f6' : 'var(--muted-foreground)'}; font-weight: ${name !== 'Unassigned' ? '500' : 'normal'};">${name}</td>
+                        <td class="px-4 py-3 text-sm text-center font-bold" style="color: var(--foreground);">${data.total_sims}</td>
+                        <td class="px-4 py-3 text-sm text-center text-emerald-500">${data.active}</td>
+                        <td class="px-4 py-3 text-sm text-center text-emerald-500 font-bold">${data.online}</td>
+                        <td class="px-4 py-3 text-sm text-center text-red-500">${data.offline}</td>
+                        <td class="px-4 py-3 text-sm text-center" style="color: var(--foreground);">${(projectUsage.totalMb / 1024).toFixed(2)} GB</td>
+                        <td class="px-4 py-3 text-sm text-center ${projectUsage.overLimit > 0 ? 'text-red-500 font-bold' : ''}">${projectUsage.overLimit}</td>
+                        <td class="px-4 py-3 text-xs" style="color: var(--muted-foreground);">${providerBreakdown || '-'}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        btnLoadSimConsolidated.addEventListener('click', loadSimConsolidated);
+
+        // ==========================================
+        // SIM Insight Functions
+        // ==========================================
+        function showSimInsightError(message) {
+            siminsightErrorText.textContent = message;
+            siminsightError.classList.remove('hidden');
+            setTimeout(() => siminsightError.classList.add('hidden'), 5000);
+        }
+
+        function showSimInsightLoading(show) {
+            if (show) {
+                siminsightLoading.classList.remove('hidden');
+            } else {
+                siminsightLoading.classList.add('hidden');
+            }
+        }
+
+        function populateSimInsightProjectDropdown() {
+            const currentValue = siminsightProject.value;
+            siminsightProject.innerHTML = '<option value="">-- Select a Project --</option>';
+            Object.entries(simInsightAvailableProjects)
+                .sort((a, b) => a[1].localeCompare(b[1]))
+                .forEach(([email, name]) => {
+                    const opt = document.createElement('option');
+                    opt.value = email;
+                    opt.textContent = name;
+                    siminsightProject.appendChild(opt);
+                });
+            siminsightProject.value = currentValue;
+        }
+
+        // Enable/disable load button based on project selection
+        siminsightProject.addEventListener('change', () => {
+            btnLoadSimInsight.disabled = !siminsightProject.value;
+        });
+
+        async function loadSimInsight() {
+            const project = siminsightProject.value;
+            if (!project) {
+                showSimInsightError('Please select a project first');
+                return;
+            }
+
+            showSimInsightLoading(true);
+            siminsightError.classList.add('hidden');
+            siSelectProjectMsg.classList.add('hidden');
+            siminsightTableContainer.classList.add('hidden');
+            siProjectStats.classList.add('hidden');
+            siFilters.classList.add('hidden');
+            siActions.classList.add('hidden');
+
+            try {
+                const response = await fetch(`/api/sim-insight?project=${encodeURIComponent(project)}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load SIM insight data');
+                }
+
+                simInsightDevices = data.devices;
+                dataLimitMb = data.data_limit_mb || 30;
+
+                // Update available projects if not already loaded
+                if (data.available_projects && Object.keys(data.available_projects).length > 0 && Object.keys(simInsightAvailableProjects).length === 0) {
+                    simInsightAvailableProjects = data.available_projects;
+                    populateSimInsightProjectDropdown();
+                    siminsightProject.value = project;
+                }
+
+                // Clear filters
+                siSearch.value = '';
+                siStatus.value = '';
+                siSimStatus.value = '';
+                siDataUsage.value = '';
+
+                populateSimProviderFilter();
+                renderProjectStats();
+                renderSimInsightTable();
+
+                siProjectStats.classList.remove('hidden');
+                siFilters.classList.remove('hidden');
+                siActions.classList.remove('hidden');
+
+            } catch (err) {
+                showSimInsightError(err.message);
+                siSelectProjectMsg.classList.remove('hidden');
+            } finally {
+                showSimInsightLoading(false);
+            }
+        }
+
+        function renderProjectStats() {
+            const totalSims = simInsightDevices.length;
+            const online = simInsightDevices.filter(d => d.status === 'Online').length;
+            const offline = simInsightDevices.filter(d => d.status === 'Offline').length;
+            const overLimit = simInsightDevices.filter(d => (d.data_used_mb || 0) > dataLimitMb).length;
+            const highUsage = simInsightDevices.filter(d => {
+                const mb = d.data_used_mb || 0;
+                return mb >= 20 && mb <= dataLimitMb;
+            }).length;
+            const totalDataMb = simInsightDevices.reduce((sum, d) => sum + (d.data_used_mb || 0), 0);
+
+            siProjectStats.innerHTML = `
+                <div class="p-4 rounded-lg" style="background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%); border: none;">
+                    <div class="text-2xl font-bold text-white">${totalSims.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider text-purple-200">Total SIMs</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-emerald-500">${online.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Online</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-red-500">${offline.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Offline</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-red-500">${overLimit.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Over Limit</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold text-amber-500">${highUsage.toLocaleString()}</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">High Usage</div>
+                </div>
+                <div class="p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-2xl font-bold" style="color: var(--foreground);">${(totalDataMb / 1024).toFixed(2)} GB</div>
+                    <div class="text-xs uppercase tracking-wider" style="color: var(--muted-foreground);">Data Used</div>
+                </div>
+            `;
+        }
+
+        function populateSimProviderFilter() {
+            const providers = [...new Set(simInsightDevices.map(d => d.sim_provider))].filter(Boolean).sort();
+            siProvider.innerHTML = '<option value="">All Providers</option>';
+            providers.forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                siProvider.appendChild(opt);
+            });
+        }
+
+        function renderSimInsightTable() {
+            if (simInsightDevices.length === 0) {
+                siminsightBody.innerHTML = `
+                    <tr>
+                        <td colspan="10" class="px-4 py-12 text-center" style="color: var(--muted-foreground);">No SIM data found for this project</td>
+                    </tr>
+                `;
+            } else {
+                siminsightBody.innerHTML = simInsightDevices.map((device, idx) => {
+                    const statusLower = (device.status || '').toLowerCase();
+                    const deviceName = device.gpswox_name || device.fota_name || '-';
+                    const simStatus = device.sim_status || '-';
+                    const dataUsedMb = device.data_used_mb || 0;
+                    const dataPercent = Math.min((dataUsedMb / dataLimitMb) * 100, 100);
+                    const isOverLimit = dataUsedMb > dataLimitMb;
+                    const barColor = isOverLimit ? '#ef4444' : (dataPercent > 80 ? '#f59e0b' : '#10b981');
+
+                    return `
+                        <tr class="transition-colors hover:opacity-80"
+                            style="background: ${idx % 2 === 0 ? 'var(--background)' : 'var(--secondary)'};"
+                            data-status="${statusLower}"
+                            data-provider="${device.sim_provider || ''}"
+                            data-simstatus="${simStatus}"
+                            data-datamb="${dataUsedMb}">
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--muted-foreground);">${idx + 1}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.imei}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${deviceName}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap ${statusLower === 'online' ? 'text-emerald-500 font-bold' : (statusLower === 'recent' ? 'text-orange-500' : (statusLower === 'inactive' ? 'text-gray-400' : 'text-red-500'))}">${device.status}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="min-width: 140px;">
+                                <div class="flex items-center gap-2">
+                                    <div class="flex-1 h-2 rounded-full" style="background: var(--muted); min-width: 60px;">
+                                        <div class="h-2 rounded-full transition-all" style="width: ${dataPercent}%; background: ${barColor};"></div>
+                                    </div>
+                                    <span class="text-xs font-medium ${isOverLimit ? 'text-red-500' : ''}" style="min-width: 55px;">${dataUsedMb.toFixed(1)} MB</span>
+                                </div>
+                            </td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.sim_provider || '-'}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap ${simStatus === 'Active' ? 'text-emerald-500' : 'text-gray-400'}">${simStatus}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.iccid || '-'}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.msisdn || '-'}</td>
+                            <td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${device.last_seen || '-'}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+
+            siminsightTotal.textContent = simInsightDevices.length;
+            siminsightVisible.textContent = simInsightDevices.length;
+            siminsightTableContainer.classList.remove('hidden');
+        }
+
+        function filterSimInsightTable() {
+            const search = siSearch.value.toLowerCase();
+            const status = siStatus.value;
+            const provider = siProvider.value;
+            const simStatusFilter = siSimStatus.value;
+            const dataUsageFilter = siDataUsage.value;
+
+            const rows = siminsightBody.querySelectorAll('tr');
+            let visible = 0;
+
+            rows.forEach((row) => {
+                const text = row.textContent.toLowerCase();
+                const rowStatus = row.dataset.status;
+                const rowProvider = row.dataset.provider;
+                const rowSimStatus = row.dataset.simstatus;
+                const rowDataMb = parseFloat(row.dataset.datamb) || 0;
+
+                let show = true;
+
+                if (search && !text.includes(search)) show = false;
+                if (status && rowStatus !== status) show = false;
+                if (provider && rowProvider !== provider) show = false;
+                if (simStatusFilter && rowSimStatus !== simStatusFilter) show = false;
+
+                // Data usage filter
+                if (dataUsageFilter) {
+                    if (dataUsageFilter === 'over' && rowDataMb <= dataLimitMb) show = false;
+                    if (dataUsageFilter === 'high' && (rowDataMb < 20 || rowDataMb > dataLimitMb)) show = false;
+                    if (dataUsageFilter === 'normal' && rowDataMb >= 20) show = false;
+                    if (dataUsageFilter === 'zero' && rowDataMb > 0) show = false;
+                }
+
+                row.style.display = show ? '' : 'none';
+                if (show) {
+                    visible++;
+                    row.cells[0].textContent = visible;
+                }
+            });
+
+            siminsightVisible.textContent = visible;
+        }
+
+        function exportSimInsightCSV() {
+            const rows = Array.from(siminsightBody.querySelectorAll('tr')).filter(r => r.style.display !== 'none');
+            const headers = Array.from(document.querySelectorAll('#siminsight-table thead th')).map(th => th.textContent.trim());
+
+            let csv = headers.join(',') + '\n';
+
+            rows.forEach(row => {
+                const values = Array.from(row.querySelectorAll('td')).map(td => `"${td.textContent.replace(/"/g, '""')}"`);
+                csv += values.join(',') + '\n';
+            });
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'sim_insight_export_' + new Date().toISOString().slice(0, 10) + '.csv';
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        }
+
+        // SIM Insight event listeners
+        [siSearch, siStatus, siProvider, siSimStatus, siDataUsage].forEach(el => {
+            el.addEventListener('input', filterSimInsightTable);
+            el.addEventListener('change', filterSimInsightTable);
+        });
+
+        btnExportSimInsight.addEventListener('click', exportSimInsightCSV);
+        btnLoadSimInsight.addEventListener('click', loadSimInsight);
+
+        // Load project dropdown when SIM Insight tab is first accessed
+        async function loadSimInsightProjects() {
+            if (Object.keys(simInsightAvailableProjects).length > 0) return;
+            try {
+                const response = await fetch('/api/sim-insight');
+                const data = await response.json();
+                if (data.available_projects) {
+                    simInsightAvailableProjects = data.available_projects;
+                    populateSimInsightProjectDropdown();
+                }
+            } catch (err) {
+                console.error('Failed to load projects:', err);
             }
         }
     </script>
