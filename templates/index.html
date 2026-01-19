@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Reports Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        background: 'var(--background)',
+                        foreground: 'var(--foreground)',
+                        primary: 'var(--primary)',
+                        secondary: 'var(--secondary)',
+                        muted: 'var(--muted)',
+                        'muted-foreground': 'var(--muted-foreground)',
+                        border: 'var(--border)',
+                    },
+                    borderRadius: {
+                        DEFAULT: '0.625rem',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        :root {
+            --background: #ffffff;
+            --foreground: #0a0a0a;
+            --primary: #030213;
+            --secondary: #f4f4f5;
+            --muted: #ececf0;
+            --muted-foreground: #717182;
+            --border: rgba(0, 0, 0, 0.1);
+            --ring: #030213;
+        }
+        .dark {
+            --background: #0a0a0a;
+            --foreground: #fafafa;
+            --primary: #fafafa;
+            --secondary: #27272a;
+            --muted: #27272a;
+            --muted-foreground: #a1a1aa;
+            --border: rgba(255, 255, 255, 0.1);
+            --ring: #fafafa;
+        }
+        body {
+            background-color: var(--background);
+            color: var(--foreground);
+        }
+        .loader {
+            border: 2px solid var(--muted);
+            border-top: 2px solid var(--primary);
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        select, input[type="date"] {
+            background-color: var(--secondary);
+            border-color: var(--border);
+            color: var(--foreground);
+        }
+        select:focus, input[type="date"]:focus {
+            outline: none;
+            ring: 2px;
+            ring-color: var(--ring);
+        }
+    </style>
+</head>
+<body class="min-h-screen transition-colors duration-200">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+            <div>
+                <h1 class="text-2xl sm:text-3xl font-medium" style="color: var(--foreground);">GPS Reports Dashboard</h1>
+                <p class="mt-2 text-sm" style="color: var(--muted-foreground);">Extract and download reports from the database</p>
+            </div>
+            <button id="theme-toggle" class="p-2 rounded-lg transition-colors" style="background: var(--secondary);" title="Toggle theme">
+                <svg id="sun-icon" class="w-5 h-5 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+                </svg>
+                <svg id="moon-icon" class="w-5 h-5 block dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Main Card -->
+        <div class="rounded-xl shadow-sm p-6" style="background: var(--background); border: 1px solid var(--border);">
+            <!-- Form Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6">
+                <!-- Project Selector -->
+                <div class="space-y-2">
+                    <label for="project" class="block text-sm font-medium" style="color: var(--foreground);">Project</label>
+                    <select id="project" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors" style="background: var(--secondary); border: 1px solid var(--border);">
+                        <option value="">Select a project</option>
+                        {% for email, info in projects.items() %}
+                        <option value="{{ email }}">{{ info.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <!-- Report Type Selector -->
+                <div class="space-y-2">
+                    <label for="report" class="block text-sm font-medium" style="color: var(--foreground);">Report Type</label>
+                    <select id="report" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors disabled:opacity-50" style="background: var(--secondary); border: 1px solid var(--border);" disabled>
+                        <option value="">Select a project first</option>
+                    </select>
+                </div>
+
+                <!-- Start Date -->
+                <div class="space-y-2">
+                    <label for="start_date" class="block text-sm font-medium" style="color: var(--foreground);">Start Date</label>
+                    <input type="date" id="start_date" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors" style="background: var(--secondary); border: 1px solid var(--border);">
+                </div>
+
+                <!-- End Date -->
+                <div class="space-y-2">
+                    <label for="end_date" class="block text-sm font-medium" style="color: var(--foreground);">End Date</label>
+                    <input type="date" id="end_date" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors" style="background: var(--secondary); border: 1px solid var(--border);">
+                </div>
+            </div>
+
+            <!-- Report Description -->
+            <div id="report-description" class="hidden mb-6 p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                <p class="text-sm" style="color: var(--muted-foreground);"><span class="font-medium" style="color: var(--foreground);">Description:</span> <span id="description-text"></span></p>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="flex flex-wrap items-center gap-3 mb-6">
+                <button id="btn-preview" class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); color: var(--foreground); border: 1px solid var(--border);" disabled>
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                    </svg>
+                    Preview
+                </button>
+
+                <div class="h-6 w-px mx-2" style="background: var(--border);"></div>
+
+                <span class="text-sm" style="color: var(--muted-foreground);">Download:</span>
+                <div class="flex gap-2">
+                    <button id="btn-csv" class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        CSV
+                    </button>
+                    <button id="btn-excel" class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        Excel
+                    </button>
+                    <button id="btn-pdf" class="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                        </svg>
+                        PDF
+                    </button>
+                </div>
+            </div>
+
+            <!-- Loading Indicator -->
+            <div id="loading" class="hidden flex items-center justify-center py-12">
+                <div class="loader mr-3"></div>
+                <span class="text-sm" style="color: var(--muted-foreground);">Loading data...</span>
+            </div>
+
+            <!-- Error Message -->
+            <div id="error" class="hidden mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                <div class="flex items-center">
+                    <svg class="w-4 h-4 mr-2 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                    </svg>
+                    <p class="text-sm text-red-800 dark:text-red-200"><span class="font-medium">Error:</span> <span id="error-text"></span></p>
+                </div>
+            </div>
+
+            <!-- Preview Table -->
+            <div id="preview-container" class="hidden space-y-4">
+                <div class="flex items-center justify-between">
+                    <h3 class="text-lg font-medium" style="color: var(--foreground);">Preview</h3>
+                    <span id="row-count" class="text-sm" style="color: var(--muted-foreground);"></span>
+                </div>
+
+                <div class="overflow-x-auto rounded-lg" style="border: 1px solid var(--border);">
+                    <table class="min-w-full divide-y" style="border-color: var(--border);">
+                        <thead id="preview-header" style="background: var(--secondary);">
+                        </thead>
+                        <tbody id="preview-body" class="divide-y" style="border-color: var(--border);">
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                <div id="pagination" class="flex items-center justify-between pt-4">
+                    <div class="text-sm" style="color: var(--muted-foreground);">
+                        <span id="pagination-info"></span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button id="btn-first" class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); border: 1px solid var(--border);" title="First page">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>
+                            </svg>
+                        </button>
+                        <button id="btn-prev" class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); border: 1px solid var(--border);" title="Previous page">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+                            </svg>
+                        </button>
+                        <div class="flex items-center gap-1">
+                            <span class="text-sm" style="color: var(--muted-foreground);">Page</span>
+                            <input type="number" id="page-input" min="1" class="w-16 px-2 py-1 text-sm text-center rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                            <span class="text-sm" style="color: var(--muted-foreground);">of <span id="total-pages">1</span></span>
+                        </div>
+                        <button id="btn-next" class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); border: 1px solid var(--border);" title="Next page">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                            </svg>
+                        </button>
+                        <button id="btn-last" class="p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed" style="background: var(--secondary); border: 1px solid var(--border);" title="Last page">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/>
+                            </svg>
+                        </button>
+                        <div class="h-6 w-px mx-1" style="background: var(--border);"></div>
+                        <select id="page-size" class="px-2 py-1 text-sm rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                            <option value="10">10 / page</option>
+                            <option value="25">25 / page</option>
+                            <option value="50" selected>50 / page</option>
+                            <option value="100">100 / page</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="mt-8 text-center text-sm" style="color: var(--muted-foreground);">
+            <p>GPS Reports Dashboard</p>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let selectedReport = null;
+        let reports = [];
+        let previewData = { columns: [], data: [], total_rows: 0 };
+        let currentPage = 1;
+        let pageSize = 50;
+        let isDark = false;
+
+        // Elements
+        const projectSelect = document.getElementById('project');
+        const reportSelect = document.getElementById('report');
+        const startDate = document.getElementById('start_date');
+        const endDate = document.getElementById('end_date');
+        const btnPreview = document.getElementById('btn-preview');
+        const btnCsv = document.getElementById('btn-csv');
+        const btnExcel = document.getElementById('btn-excel');
+        const btnPdf = document.getElementById('btn-pdf');
+        const reportDescription = document.getElementById('report-description');
+        const descriptionText = document.getElementById('description-text');
+        const loading = document.getElementById('loading');
+        const errorDiv = document.getElementById('error');
+        const errorText = document.getElementById('error-text');
+        const previewContainer = document.getElementById('preview-container');
+        const previewHeader = document.getElementById('preview-header');
+        const previewBody = document.getElementById('preview-body');
+        const rowCount = document.getElementById('row-count');
+        const themeToggle = document.getElementById('theme-toggle');
+
+        // Pagination elements
+        const btnFirst = document.getElementById('btn-first');
+        const btnPrev = document.getElementById('btn-prev');
+        const btnNext = document.getElementById('btn-next');
+        const btnLast = document.getElementById('btn-last');
+        const pageInput = document.getElementById('page-input');
+        const totalPagesSpan = document.getElementById('total-pages');
+        const pageSizeSelect = document.getElementById('page-size');
+        const paginationInfo = document.getElementById('pagination-info');
+
+        // Theme toggle
+        themeToggle.addEventListener('click', () => {
+            isDark = !isDark;
+            document.documentElement.classList.toggle('dark', isDark);
+        });
+
+        // Set default dates (last 7 days)
+        const today = new Date();
+        const lastWeek = new Date(today);
+        lastWeek.setDate(lastWeek.getDate() - 7);
+        startDate.value = lastWeek.toISOString().split('T')[0];
+        endDate.value = today.toISOString().split('T')[0];
+
+        // Event Listeners
+        projectSelect.addEventListener('change', async () => {
+            const email = projectSelect.value;
+            reportSelect.innerHTML = '<option value="">Loading...</option>';
+            reportSelect.disabled = true;
+            reportDescription.classList.add('hidden');
+            previewContainer.classList.add('hidden');
+            updateButtons();
+
+            if (!email) {
+                reportSelect.innerHTML = '<option value="">Select a project first</option>';
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/reports/${encodeURIComponent(email)}`);
+                reports = await response.json();
+
+                reportSelect.innerHTML = '<option value="">Select a report</option>';
+                reports.forEach(report => {
+                    const option = document.createElement('option');
+                    option.value = report.id;
+                    option.textContent = report.name;
+                    option.dataset.description = report.description;
+                    reportSelect.appendChild(option);
+                });
+                reportSelect.disabled = false;
+            } catch (err) {
+                showError('Failed to load reports');
+                reportSelect.innerHTML = '<option value="">Failed to load</option>';
+            }
+        });
+
+        reportSelect.addEventListener('change', () => {
+            const reportId = reportSelect.value;
+            selectedReport = reports.find(r => r.id == reportId);
+
+            if (selectedReport) {
+                descriptionText.textContent = selectedReport.description;
+                reportDescription.classList.remove('hidden');
+            } else {
+                reportDescription.classList.add('hidden');
+            }
+
+            previewContainer.classList.add('hidden');
+            updateButtons();
+        });
+
+        startDate.addEventListener('change', updateButtons);
+        endDate.addEventListener('change', updateButtons);
+
+        btnPreview.addEventListener('click', () => {
+            currentPage = 1;
+            previewReport();
+        });
+        btnCsv.addEventListener('click', () => downloadReport('csv'));
+        btnExcel.addEventListener('click', () => downloadReport('excel'));
+        btnPdf.addEventListener('click', () => downloadReport('pdf'));
+
+        // Pagination event listeners
+        btnFirst.addEventListener('click', () => { currentPage = 1; previewReport(); });
+        btnPrev.addEventListener('click', () => { if (currentPage > 1) { currentPage--; previewReport(); } });
+        btnNext.addEventListener('click', () => {
+            const totalPages = Math.ceil(previewData.total_rows / pageSize);
+            if (currentPage < totalPages) { currentPage++; previewReport(); }
+        });
+        btnLast.addEventListener('click', () => {
+            currentPage = Math.ceil(previewData.total_rows / pageSize);
+            previewReport();
+        });
+
+        pageInput.addEventListener('change', () => {
+            const totalPages = Math.ceil(previewData.total_rows / pageSize);
+            let newPage = parseInt(pageInput.value);
+            if (newPage < 1) newPage = 1;
+            if (newPage > totalPages) newPage = totalPages;
+            currentPage = newPage;
+            previewReport();
+        });
+
+        pageSizeSelect.addEventListener('change', () => {
+            pageSize = parseInt(pageSizeSelect.value);
+            currentPage = 1;
+            previewReport();
+        });
+
+        function updateButtons() {
+            const isValid = projectSelect.value && reportSelect.value && startDate.value && endDate.value;
+            btnPreview.disabled = !isValid;
+            btnCsv.disabled = !isValid;
+            btnExcel.disabled = !isValid;
+            btnPdf.disabled = !isValid;
+        }
+
+        function updatePagination() {
+            const totalPages = Math.max(1, Math.ceil(previewData.total_rows / pageSize));
+            const start = (currentPage - 1) * pageSize + 1;
+            const end = Math.min(currentPage * pageSize, previewData.total_rows);
+
+            totalPagesSpan.textContent = totalPages;
+            pageInput.value = currentPage;
+            pageInput.max = totalPages;
+
+            btnFirst.disabled = currentPage === 1;
+            btnPrev.disabled = currentPage === 1;
+            btnNext.disabled = currentPage >= totalPages;
+            btnLast.disabled = currentPage >= totalPages;
+
+            if (previewData.total_rows > 0) {
+                paginationInfo.textContent = `Showing ${start} to ${end} of ${previewData.total_rows} entries`;
+            } else {
+                paginationInfo.textContent = 'No entries';
+            }
+        }
+
+        function showError(message) {
+            errorText.textContent = message;
+            errorDiv.classList.remove('hidden');
+            setTimeout(() => errorDiv.classList.add('hidden'), 5000);
+        }
+
+        function showLoading(show) {
+            if (show) {
+                loading.classList.remove('hidden');
+            } else {
+                loading.classList.add('hidden');
+            }
+        }
+
+        async function previewReport() {
+            showLoading(true);
+            errorDiv.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        project: projectSelect.value,
+                        report_id: reportSelect.value,
+                        start_date: startDate.value,
+                        end_date: endDate.value,
+                        page: currentPage,
+                        page_size: pageSize
+                    })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to generate preview');
+                }
+
+                previewData = data;
+
+                // Render table header
+                previewHeader.innerHTML = `
+                    <tr>
+                        ${data.columns.map(col => `<th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider" style="color: var(--muted-foreground);">${col}</th>`).join('')}
+                    </tr>
+                `;
+
+                // Render table body
+                if (data.data.length === 0) {
+                    previewBody.innerHTML = `
+                        <tr>
+                            <td colspan="${data.columns.length}" class="px-4 py-12 text-center" style="color: var(--muted-foreground);">No data found for the selected criteria</td>
+                        </tr>
+                    `;
+                } else {
+                    previewBody.innerHTML = data.data.map((row, idx) => `
+                        <tr class="transition-colors hover:opacity-80" style="background: ${idx % 2 === 0 ? 'var(--background)' : 'var(--secondary)'};">
+                            ${row.map(cell => `<td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${cell ?? '-'}</td>`).join('')}
+                        </tr>
+                    `).join('');
+                }
+
+                rowCount.textContent = `${data.total_rows} total rows`;
+                updatePagination();
+                previewContainer.classList.remove('hidden');
+
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function downloadReport(format) {
+            showLoading(true);
+            errorDiv.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        project: projectSelect.value,
+                        report_id: reportSelect.value,
+                        start_date: startDate.value,
+                        end_date: endDate.value,
+                        format: format
+                    })
+                });
+
+                if (!response.ok) {
+                    const data = await response.json();
+                    throw new Error(data.error || 'Failed to generate report');
+                }
+
+                const contentDisposition = response.headers.get('Content-Disposition');
+                let filename = `report.${format === 'excel' ? 'xlsx' : format}`;
+                if (contentDisposition) {
+                    const match = contentDisposition.match(/filename=(.+)/);
+                    if (match) filename = match[1];
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
+
+            } catch (err) {
+                showError(err.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+    </script>
+</body>
+</html>
