@@ -170,6 +170,471 @@ def get_user_by_email(executor, email):
     return dict(zip(columns, user))
 
 
+def point_in_polygon(lat, lng, polygon):
+    """
+    Check if a point (lat, lng) is inside a polygon using ray casting algorithm.
+    Polygon is a list of {'lat': float, 'lng': float} dictionaries.
+    """
+    n = len(polygon)
+    if n < 3:
+        return False
+
+    inside = False
+    j = n - 1
+
+    for i in range(n):
+        yi, xi = polygon[i]['lat'], polygon[i]['lng']
+        yj, xj = polygon[j]['lat'], polygon[j]['lng']
+
+        if ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+
+    return inside
+
+
+def load_geofences_for_user(executor, user_id):
+    """
+    Load all geofences for a user and return them as a list of parsed polygons.
+    Returns list of {'id': int, 'name': str, 'polygon': [{'lat': float, 'lng': float}, ...]}
+    """
+    import json
+
+    geofences_query = f"""
+        SELECT id, name, coordinates, type, radius, center
+        FROM geofences
+        WHERE user_id = {user_id} AND active = 1
+    """
+    rows = executor.fetchall(geofences_query)
+
+    geofences = []
+    for row in rows:
+        gf_id, name, coordinates, gf_type, radius, center = row
+
+        if gf_type == 'polygon' and coordinates:
+            try:
+                polygon = json.loads(coordinates)
+                if isinstance(polygon, list) and len(polygon) >= 3:
+                    geofences.append({
+                        'id': gf_id,
+                        'name': name,
+                        'type': 'polygon',
+                        'polygon': polygon
+                    })
+            except (json.JSONDecodeError, TypeError):
+                continue
+        elif gf_type == 'circle' and center and radius:
+            try:
+                center_point = json.loads(center) if isinstance(center, str) else center
+                geofences.append({
+                    'id': gf_id,
+                    'name': name,
+                    'type': 'circle',
+                    'center': center_point,
+                    'radius': float(radius) if radius else 0
+                })
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+
+    return geofences
+
+
+def find_geofence_for_point(lat, lng, geofences):
+    """
+    Find which geofence (if any) contains the given point.
+    Returns geofence name if found, None otherwise.
+    """
+    import math
+
+    for gf in geofences:
+        if gf['type'] == 'polygon':
+            if point_in_polygon(lat, lng, gf['polygon']):
+                return gf['name']
+        elif gf['type'] == 'circle':
+            # Check if point is within circle radius (approximate using Haversine)
+            center = gf['center']
+            if isinstance(center, dict):
+                clat, clng = center.get('lat', 0), center.get('lng', 0)
+            elif isinstance(center, list) and len(center) >= 2:
+                clat, clng = center[0], center[1]
+            else:
+                continue
+
+            # Haversine distance approximation
+            R = 6371000  # Earth radius in meters
+            dlat = math.radians(lat - clat)
+            dlng = math.radians(lng - clng)
+            a = math.sin(dlat/2)**2 + math.cos(math.radians(clat)) * math.cos(math.radians(lat)) * math.sin(dlng/2)**2
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+            distance = R * c
+
+            if distance <= gf['radius']:
+                return gf['name']
+
+    return None
+
+
+def generate_trip_report_data(executor, user_id, start_date, end_date):
+    """
+    Generate trip report data showing vehicle states (parked, idle, run).
+
+    Returns a list of dictionaries with per-vehicle trip segments.
+    Each vehicle section contains:
+    - Vehicle summary (name, total trip time, total idle time, total distance)
+    - Trip segments with start/stop times, duration, location/geofence, distance, avg speed, state
+    """
+    import re
+    from datetime import timedelta
+
+    # Speed threshold for determining run vs idle (km/h)
+    SPEED_THRESHOLD = 2.0
+
+    # Load geofences for this user
+    geofences = load_geofences_for_user(executor, user_id)
+
+    # Get all devices for this user
+    devices_query = f"""
+        SELECT d.id, d.name, d.imei, dg.title as group_name
+        FROM devices d
+        JOIN user_device_pivot udp ON d.id = udp.device_id
+        LEFT JOIN device_groups dg ON udp.group_id = dg.id
+        WHERE udp.user_id = {user_id} AND d.deleted = 0
+        ORDER BY d.name
+    """
+    devices = executor.fetchall(devices_query)
+
+    if not devices:
+        return [], {}
+
+    all_trip_data = []
+    global_stats = {
+        'period_start': start_date,
+        'period_end': end_date,
+        'total_vehicles': 0,
+        'total_duration_idle': 0,  # seconds
+        'total_duration_parked': 0,  # seconds
+        'total_duration_run': 0,  # seconds
+        'total_distance': 0.0
+    }
+
+    for device in devices:
+        device_id, device_name, imei, group_name = device
+
+        # Query positions from device-specific table in gpswox_traccar
+        # Switch to traccar database for position query
+        positions_query = f"""
+            SELECT
+                time,
+                speed,
+                latitude,
+                longitude,
+                distance,
+                EXTRACTVALUE(other, '//ignition') as ignition
+            FROM gpswox_traccar.positions_{device_id}
+            WHERE time BETWEEN '{start_date} 00:00:00' AND '{end_date} 23:59:59'
+            ORDER BY time ASC
+        """
+
+        try:
+            positions = executor.fetchall(positions_query)
+        except Exception as e:
+            # Table might not exist for this device
+            continue
+
+        if not positions:
+            continue
+
+        # Process positions into trip segments
+        segments = []
+        current_segment = None
+        segment_positions = []
+
+        for pos in positions:
+            pos_time, speed, lat, lng, distance, ignition = pos
+
+            # Parse values
+            try:
+                speed = float(speed) if speed else 0.0
+                distance = float(distance) if distance else 0.0
+                lat = float(lat) if lat else 0.0
+                lng = float(lng) if lng else 0.0
+            except (ValueError, TypeError):
+                speed = 0.0
+                distance = 0.0
+                lat = 0.0
+                lng = 0.0
+
+            # Determine state based on ignition and speed
+            ignition_on = str(ignition).lower() == 'true'
+
+            if not ignition_on:
+                state = 'parked'
+            elif speed > SPEED_THRESHOLD:
+                state = 'run'
+            else:
+                state = 'idle'
+
+            # Create or extend segment
+            if current_segment is None:
+                # Look up geofence for this location
+                geofence_name = find_geofence_for_point(lat, lng, geofences) if lat and lng else None
+
+                current_segment = {
+                    'start_time': pos_time,
+                    'state': state,
+                    'start_lat': lat,
+                    'start_lng': lng,
+                    'geofence': geofence_name,
+                    'distance': 0.0,
+                    'speeds': []
+                }
+                segment_positions = [(pos_time, speed, distance)]
+            elif current_segment['state'] == state:
+                # Continue same segment
+                segment_positions.append((pos_time, speed, distance))
+                if state == 'run':
+                    current_segment['distance'] += distance
+                    current_segment['speeds'].append(speed)
+            else:
+                # State changed - close current segment and start new one
+                last_time = segment_positions[-1][0] if segment_positions else pos_time
+                current_segment['stop_time'] = last_time
+
+                # Calculate average speed for run segments
+                if current_segment['state'] == 'run' and current_segment['speeds']:
+                    current_segment['avg_speed'] = sum(current_segment['speeds']) / len(current_segment['speeds'])
+                else:
+                    current_segment['avg_speed'] = 0.0
+
+                segments.append(current_segment)
+
+                # Look up geofence for new segment location
+                geofence_name = find_geofence_for_point(lat, lng, geofences) if lat and lng else None
+
+                # Start new segment
+                current_segment = {
+                    'start_time': pos_time,
+                    'state': state,
+                    'start_lat': lat,
+                    'start_lng': lng,
+                    'geofence': geofence_name,
+                    'distance': 0.0,
+                    'speeds': []
+                }
+                segment_positions = [(pos_time, speed, distance)]
+
+        # Close last segment
+        if current_segment and segment_positions:
+            current_segment['stop_time'] = segment_positions[-1][0]
+            if current_segment['state'] == 'run' and current_segment['speeds']:
+                current_segment['avg_speed'] = sum(current_segment['speeds']) / len(current_segment['speeds'])
+            else:
+                current_segment['avg_speed'] = 0.0
+            segments.append(current_segment)
+
+        if not segments:
+            continue
+
+        # Calculate vehicle totals
+        vehicle_stats = {
+            'total_trip': 0,  # seconds
+            'total_idle': 0,  # seconds
+            'total_parked': 0,  # seconds
+            'total_distance': 0.0
+        }
+
+        for seg in segments:
+            try:
+                start_dt = datetime.strptime(str(seg['start_time'])[:19], '%Y-%m-%d %H:%M:%S')
+                stop_dt = datetime.strptime(str(seg['stop_time'])[:19], '%Y-%m-%d %H:%M:%S')
+                duration_sec = (stop_dt - start_dt).total_seconds()
+            except (ValueError, TypeError):
+                duration_sec = 0
+
+            seg['duration_seconds'] = duration_sec
+
+            if seg['state'] == 'run':
+                vehicle_stats['total_trip'] += duration_sec
+                vehicle_stats['total_distance'] += seg['distance']
+            elif seg['state'] == 'idle':
+                vehicle_stats['total_idle'] += duration_sec
+            else:  # parked
+                vehicle_stats['total_parked'] += duration_sec
+
+        # Add to results
+        all_trip_data.append({
+            'device_id': device_id,
+            'device_name': device_name,
+            'imei': imei,
+            'group': group_name,
+            'stats': vehicle_stats,
+            'segments': segments
+        })
+
+        # Update global stats
+        global_stats['total_vehicles'] += 1
+        global_stats['total_duration_run'] += vehicle_stats['total_trip']
+        global_stats['total_duration_idle'] += vehicle_stats['total_idle']
+        global_stats['total_duration_parked'] += vehicle_stats['total_parked']
+        global_stats['total_distance'] += vehicle_stats['total_distance']
+
+    return all_trip_data, global_stats
+
+
+def format_duration(seconds):
+    """Format seconds into D:HH:MM:SS format."""
+    if not seconds or seconds < 0:
+        return "0:00:00"
+
+    days = int(seconds // 86400)
+    hours = int((seconds % 86400) // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+
+    if days > 0:
+        return f"{days}:{hours:02d}:{minutes:02d}:{secs:02d}"
+    else:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+
+
+def export_trip_report_to_excel(trip_data, global_stats, start_date, end_date):
+    """Export trip report to Excel with proper formatting matching the sample."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Trip Report"
+
+    # Global header
+    ws.append(['Period start:', f'{start_date} 00:00:00'])
+    ws.append(['Period end:', f'{end_date} 23:59:59'])
+    ws.append(['Total vehicles:', global_stats['total_vehicles']])
+    ws.append(['Total duration idle:', format_duration(global_stats['total_duration_idle'])])
+    ws.append(['Total Duration Parking:', format_duration(global_stats['total_duration_parked'])])
+    ws.append(['Total distance:', round(global_stats['total_distance'], 6)])
+    ws.append([])
+    ws.append(['* Idle = Time a vehicle is online and while standing still.'])
+    ws.append(['* Trip = Time that a vehicle is online and moving.'])
+    ws.append(['* Parked = Time a vehicle is online and while standing with ignition signal off'])
+
+    # Per-vehicle sections
+    for vehicle in trip_data:
+        ws.append([])
+        ws.append([f"Info : {vehicle['device_name']}"])
+        ws.append(['Total duration trip:', format_duration(vehicle['stats']['total_trip'])])
+        ws.append(['Total duration idle:', format_duration(vehicle['stats']['total_idle'])])
+        ws.append(['Total distance:', round(vehicle['stats']['total_distance'], 6)])
+        ws.append(['Start Time', 'Stop Time', 'Duration', 'Address', 'Distance', 'Avg Speed', 'Trip State', 'Vehicle Name'])
+
+        vehicle_total_duration = 0
+        vehicle_total_distance = 0
+        vehicle_total_speed_count = 0
+        vehicle_total_speed_sum = 0
+
+        for seg in vehicle['segments']:
+            start_time = str(seg['start_time'])[:19] if seg.get('start_time') else ''
+            stop_time = str(seg['stop_time'])[:19] if seg.get('stop_time') else ''
+            duration = format_duration(seg.get('duration_seconds', 0))
+
+            # Use geofence name if available, otherwise use Google Maps link
+            geofence_name = seg.get('geofence')
+            lat = seg.get('start_lat', 0)
+            lng = seg.get('start_lng', 0)
+            if geofence_name:
+                address = geofence_name
+            elif lat and lng:
+                address = f"https://www.google.com/maps?q={lat},{lng}"
+            else:
+                address = ''
+
+            state = seg.get('state', '')
+
+            if state == 'run':
+                distance = round(seg.get('distance', 0), 6)
+                avg_speed = round(seg.get('avg_speed', 0), 6)
+                vehicle_name = vehicle['device_name']
+                vehicle_total_distance += distance
+                if avg_speed > 0:
+                    vehicle_total_speed_sum += avg_speed
+                    vehicle_total_speed_count += 1
+            else:
+                distance = None
+                avg_speed = None
+                vehicle_name = None
+
+            vehicle_total_duration += seg.get('duration_seconds', 0)
+
+            ws.append([start_time, stop_time, duration, address, distance, avg_speed, state, vehicle_name])
+
+        # Vehicle summary row
+        overall_avg_speed = vehicle_total_speed_sum / vehicle_total_speed_count if vehicle_total_speed_count > 0 else 0
+        ws.append([None, None, format_duration(vehicle_total_duration), None,
+                   round(vehicle_total_distance, 6), round(overall_avg_speed, 5), None, None])
+
+    # Save to BytesIO
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
+def export_trip_report_to_csv(trip_data, global_stats, start_date, end_date):
+    """Export trip report to CSV format."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Global header
+    writer.writerow(['Period start:', f'{start_date} 00:00:00'])
+    writer.writerow(['Period end:', f'{end_date} 23:59:59'])
+    writer.writerow(['Total vehicles:', global_stats['total_vehicles']])
+    writer.writerow(['Total duration idle:', format_duration(global_stats['total_duration_idle'])])
+    writer.writerow(['Total Duration Parking:', format_duration(global_stats['total_duration_parked'])])
+    writer.writerow(['Total distance:', round(global_stats['total_distance'], 6)])
+    writer.writerow([])
+
+    # Per-vehicle sections
+    for vehicle in trip_data:
+        writer.writerow([])
+        writer.writerow([f"Info : {vehicle['device_name']}"])
+        writer.writerow(['Total duration trip:', format_duration(vehicle['stats']['total_trip'])])
+        writer.writerow(['Total duration idle:', format_duration(vehicle['stats']['total_idle'])])
+        writer.writerow(['Total distance:', round(vehicle['stats']['total_distance'], 6)])
+        writer.writerow(['Start Time', 'Stop Time', 'Duration', 'Address', 'Distance', 'Avg Speed', 'Trip State', 'Vehicle Name'])
+
+        for seg in vehicle['segments']:
+            start_time = str(seg['start_time'])[:19] if seg.get('start_time') else ''
+            stop_time = str(seg['stop_time'])[:19] if seg.get('stop_time') else ''
+            duration = format_duration(seg.get('duration_seconds', 0))
+
+            # Use geofence name if available, otherwise use Google Maps link
+            geofence_name = seg.get('geofence')
+            lat = seg.get('start_lat', 0)
+            lng = seg.get('start_lng', 0)
+            if geofence_name:
+                address = geofence_name
+            elif lat and lng:
+                address = f"https://www.google.com/maps?q={lat},{lng}"
+            else:
+                address = ''
+
+            state = seg.get('state', '')
+
+            if state == 'run':
+                distance = round(seg.get('distance', 0), 6)
+                avg_speed = round(seg.get('avg_speed', 0), 6)
+                vehicle_name = vehicle['device_name']
+            else:
+                distance = ''
+                avg_speed = ''
+                vehicle_name = ''
+
+            writer.writerow([start_time, stop_time, duration, address, distance, avg_speed, state, vehicle_name])
+
+    output.seek(0)
+    return output.getvalue()
+
+
 def generate_report_data(executor, project_email, report_id, start_date, end_date):
     """Generate report data based on report type."""
     user = get_user_by_email(executor, project_email)
@@ -658,14 +1123,83 @@ def generate_report():
     report_info = next((r for r in reports if r['id'] == report_id), None)
     report_name = report_info['name'] if report_info else 'report'
 
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    safe_name = report_name.replace(' ', '_').replace('/', '_')
+
+    # Special handling for Trip Report
+    if report_id == 10:  # Trip Report
+        try:
+            with get_db_connection() as executor:
+                user = get_user_by_email(executor, project_email)
+                if not user:
+                    return jsonify({'error': 'Project not found'}), 404
+
+                trip_data, global_stats = generate_trip_report_data(
+                    executor, user['id'], start_date, end_date
+                )
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+        if format_type == 'csv':
+            content = export_trip_report_to_csv(trip_data, global_stats, start_date, end_date)
+            return Response(
+                content,
+                mimetype='text/csv',
+                headers={'Content-Disposition': f'attachment; filename={safe_name}_{start_date}__{end_date}.csv'}
+            )
+        elif format_type == 'excel':
+            content = export_trip_report_to_excel(trip_data, global_stats, start_date, end_date)
+            return send_file(
+                content,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                as_attachment=True,
+                download_name=f'{safe_name}_{start_date}__{end_date}.xlsx'
+            )
+        elif format_type == 'pdf':
+            # For PDF, convert to flat table format
+            columns = ['Vehicle', 'Start Time', 'Stop Time', 'Duration', 'Location', 'Distance', 'Avg Speed', 'State']
+            rows = []
+            for vehicle in trip_data:
+                for seg in vehicle['segments']:
+                    # Use geofence name if available, otherwise show coordinates
+                    geofence_name = seg.get('geofence')
+                    lat = seg.get('start_lat', 0)
+                    lng = seg.get('start_lng', 0)
+                    if geofence_name:
+                        location = geofence_name
+                    elif lat and lng:
+                        location = f"{lat:.4f}, {lng:.4f}"
+                    else:
+                        location = ''
+
+                    rows.append([
+                        vehicle['device_name'],
+                        str(seg['start_time'])[:19] if seg.get('start_time') else '',
+                        str(seg['stop_time'])[:19] if seg.get('stop_time') else '',
+                        format_duration(seg.get('duration_seconds', 0)),
+                        location,
+                        round(seg.get('distance', 0), 2) if seg.get('state') == 'run' else '',
+                        round(seg.get('avg_speed', 0), 2) if seg.get('state') == 'run' else '',
+                        seg.get('state', '')
+                    ])
+            project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
+            title = f"{project_name} - {report_name}\n{start_date} to {end_date}"
+            content = export_to_pdf(columns, rows, title)
+            return send_file(
+                content,
+                mimetype='application/pdf',
+                as_attachment=True,
+                download_name=f'{safe_name}_{start_date}__{end_date}.pdf'
+            )
+
+        return jsonify({'error': 'Invalid format'}), 400
+
+    # Standard report handling
     try:
         with get_db_connection() as executor:
             columns, rows = generate_report_data(executor, project_email, report_id, start_date, end_date)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    safe_name = report_name.replace(' ', '_').replace('/', '_')
 
     if format_type == 'csv':
         content = export_to_csv(columns, rows)
@@ -874,6 +1408,69 @@ def preview_report():
     page = int(data.get('page', 1))
     page_size = int(data.get('page_size', 50))
 
+    # Special handling for Trip Report
+    if report_id == 10:
+        try:
+            with get_db_connection() as executor:
+                user = get_user_by_email(executor, project_email)
+                if not user:
+                    return jsonify({'error': 'Project not found'}), 404
+
+                trip_data, global_stats = generate_trip_report_data(
+                    executor, user['id'], start_date, end_date
+                )
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+        # Flatten trip data for preview
+        columns = ['Vehicle', 'Start Time', 'Stop Time', 'Duration', 'Location', 'Distance (km)', 'Avg Speed (km/h)', 'State']
+        rows = []
+        for vehicle in trip_data:
+            for seg in vehicle['segments']:
+                # Use geofence name if available, otherwise use coordinates
+                geofence_name = seg.get('geofence')
+                lat = seg.get('start_lat', 0)
+                lng = seg.get('start_lng', 0)
+                if geofence_name:
+                    location = geofence_name
+                elif lat and lng:
+                    location = f"{lat:.5f}, {lng:.5f}"
+                else:
+                    location = ''
+
+                rows.append([
+                    vehicle['device_name'],
+                    str(seg['start_time'])[:19] if seg.get('start_time') else '',
+                    str(seg['stop_time'])[:19] if seg.get('stop_time') else '',
+                    format_duration(seg.get('duration_seconds', 0)),
+                    location,
+                    round(seg.get('distance', 0), 3) if seg.get('state') == 'run' else '',
+                    round(seg.get('avg_speed', 0), 1) if seg.get('state') == 'run' else '',
+                    seg.get('state', '')
+                ])
+
+        # Calculate pagination
+        total_rows = len(rows)
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_rows = rows[start_idx:end_idx]
+
+        return jsonify({
+            'columns': columns,
+            'data': paginated_rows,
+            'total_rows': total_rows,
+            'page': page,
+            'page_size': page_size,
+            'summary': {
+                'total_vehicles': global_stats['total_vehicles'],
+                'total_distance': round(global_stats['total_distance'], 2),
+                'total_run_time': format_duration(global_stats['total_duration_run']),
+                'total_idle_time': format_duration(global_stats['total_duration_idle']),
+                'total_parked_time': format_duration(global_stats['total_duration_parked'])
+            }
+        })
+
+    # Standard report handling
     try:
         with get_db_connection() as executor:
             columns, rows = generate_report_data(executor, project_email, report_id, start_date, end_date)

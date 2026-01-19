@@ -278,6 +278,30 @@
                     <span id="row-count" class="text-sm" style="color: var(--muted-foreground);"></span>
                 </div>
 
+                <!-- Trip Report Summary (hidden by default) -->
+                <div id="trip-summary" class="hidden grid grid-cols-2 md:grid-cols-5 gap-4 p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                    <div class="text-center">
+                        <p class="text-xs uppercase" style="color: var(--muted-foreground);">Vehicles</p>
+                        <p id="trip-vehicles" class="text-xl font-semibold" style="color: var(--foreground);">-</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs uppercase" style="color: var(--muted-foreground);">Total Distance</p>
+                        <p id="trip-distance" class="text-xl font-semibold" style="color: var(--foreground);">-</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs uppercase" style="color: var(--muted-foreground);">Run Time</p>
+                        <p id="trip-run-time" class="text-xl font-semibold text-green-600">-</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs uppercase" style="color: var(--muted-foreground);">Idle Time</p>
+                        <p id="trip-idle-time" class="text-xl font-semibold text-yellow-600">-</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-xs uppercase" style="color: var(--muted-foreground);">Parked Time</p>
+                        <p id="trip-parked-time" class="text-xl font-semibold text-gray-500">-</p>
+                    </div>
+                </div>
+
                 <div class="overflow-x-auto rounded-lg" style="border: 1px solid var(--border);">
                     <table class="min-w-full divide-y" style="border-color: var(--border);">
                         <thead id="preview-header" style="background: var(--secondary);">
@@ -1070,12 +1094,35 @@
                 } else {
                     previewBody.innerHTML = data.data.map((row, idx) => `
                         <tr class="transition-colors hover:opacity-80" style="background: ${idx % 2 === 0 ? 'var(--background)' : 'var(--secondary)'};">
-                            ${row.map(cell => `<td class="px-4 py-3 text-sm whitespace-nowrap" style="color: var(--foreground);">${cell ?? '-'}</td>`).join('')}
+                            ${row.map((cell, cellIdx) => {
+                                // Color code trip states (last column for trip report)
+                                let cellStyle = 'color: var(--foreground);';
+                                if (reportSelect.value === '10' && cellIdx === row.length - 1) {
+                                    if (cell === 'run') cellStyle = 'color: #16a34a; font-weight: 500;';
+                                    else if (cell === 'idle') cellStyle = 'color: #ca8a04; font-weight: 500;';
+                                    else if (cell === 'parked') cellStyle = 'color: #6b7280; font-weight: 500;';
+                                }
+                                return `<td class="px-4 py-3 text-sm whitespace-nowrap" style="${cellStyle}">${cell ?? '-'}</td>`;
+                            }).join('')}
                         </tr>
                     `).join('');
                 }
 
                 rowCount.textContent = `${data.total_rows} total rows`;
+
+                // Show trip summary for Trip Report (report_id 10)
+                const tripSummary = document.getElementById('trip-summary');
+                if (data.summary && reportSelect.value === '10') {
+                    document.getElementById('trip-vehicles').textContent = data.summary.total_vehicles || '-';
+                    document.getElementById('trip-distance').textContent = `${data.summary.total_distance || 0} km`;
+                    document.getElementById('trip-run-time').textContent = data.summary.total_run_time || '-';
+                    document.getElementById('trip-idle-time').textContent = data.summary.total_idle_time || '-';
+                    document.getElementById('trip-parked-time').textContent = data.summary.total_parked_time || '-';
+                    tripSummary.classList.remove('hidden');
+                } else {
+                    tripSummary.classList.add('hidden');
+                }
+
                 updatePagination();
                 previewContainer.classList.remove('hidden');
 

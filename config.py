@@ -54,7 +54,7 @@ STANDARD_REPORTS = [
     {"id": 2, "name": "Bus Overspeeding Report", "description": "Overspeeding events for Bus vehicles"},
     {"id": 3, "name": "Heavy Overspeeding Report", "description": "Overspeeding events for Heavy vehicles"},
     {"id": 4, "name": "Light Overspeeding Report", "description": "Overspeeding events for Light vehicles"},
-    # {"id": 5, "name": "Vehicle Status Report", "description": "Device running time, idle time, and status grouped by IMEI"},
+    {"id": 10, "name": "Trip Report", "description": "Vehicle trip status with Idle, Run & Parked segments"},
 ]
 
 # Phase 3 Package 8 has additional custom event reports
