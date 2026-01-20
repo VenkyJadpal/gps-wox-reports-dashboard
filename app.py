@@ -1125,6 +1125,10 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
 
     report_name = report_info['name'].lower()
 
+    # Initialize geofence resolution flags
+    needs_geofence = False
+    location_col_indices = None
+
     # Define queries based on report type
     # Note: devices are linked to users via user_device_pivot table
     # traccar_devices contains real-time position data, joined via imei/uniqueId
@@ -1153,7 +1157,7 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
         columns = ['Event ID', 'Device Name', 'Group', 'IMEI', 'Speed', 'Event Time', 'Message', 'Location']
         query = f"""
             SELECT e.id, d.name, dg.title, d.imei, e.speed, e.created_at, e.message,
-                   CONCAT(e.latitude, ', ', e.longitude)
+                   e.latitude, e.longitude
             FROM events e
             JOIN devices d ON e.device_id = d.id
             JOIN user_device_pivot udp ON d.id = udp.device_id AND udp.user_id = {user_id}
@@ -1164,6 +1168,9 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
             {group_filter}
             ORDER BY e.created_at DESC
         """
+        # Flag to indicate this report needs geofence resolution
+        needs_geofence = True
+        location_col_indices = (7, 8)  # latitude at index 7, longitude at index 8
     elif 'trip' in report_name or 'idle' in report_name:
         columns = ['ID', 'Device Name', 'IMEI', 'Trip Date', 'Last Update']
         query = f"""
@@ -1180,7 +1187,7 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
         columns = ['Event ID', 'Device Name', 'Group', 'Event Time', 'Speed', 'Message', 'Location']
         query = f"""
             SELECT e.id, d.name, dg.title, e.created_at, e.speed, e.message,
-                   CONCAT(e.latitude, ', ', e.longitude)
+                   e.latitude, e.longitude
             FROM events e
             JOIN devices d ON e.device_id = d.id
             JOIN user_device_pivot udp ON d.id = udp.device_id AND udp.user_id = {user_id}
@@ -1190,6 +1197,8 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
             AND e.deleted = 0
             ORDER BY e.created_at DESC
         """
+        needs_geofence = True
+        location_col_indices = (6, 7)  # latitude at index 6, longitude at index 7
     elif 'harsh' in report_name or 'acceleration' in report_name or 'braking' in report_name:
         if 'acceleration' in report_name:
             event_filter = "(UPPER(e.message) LIKE '%ACCELERATION%' OR UPPER(e.message) LIKE '%ACCEL%')"
@@ -1199,7 +1208,7 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
         columns = ['Event ID', 'Device Name', 'Group', 'Event Time', 'Speed', 'Message', 'Location']
         query = f"""
             SELECT e.id, d.name, dg.title, e.created_at, e.speed, e.message,
-                   CONCAT(e.latitude, ', ', e.longitude)
+                   e.latitude, e.longitude
             FROM events e
             JOIN devices d ON e.device_id = d.id
             JOIN user_device_pivot udp ON d.id = udp.device_id AND udp.user_id = {user_id}
@@ -1209,6 +1218,8 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
             AND e.deleted = 0
             ORDER BY e.created_at DESC
         """
+        needs_geofence = True
+        location_col_indices = (6, 7)  # latitude at index 6, longitude at index 7
     elif 'signal' in report_name:
         columns = ['Device ID', 'Device Name', 'IMEI', 'Model', 'Last Update', 'Protocol']
         query = f"""
@@ -1272,7 +1283,7 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
         columns = ['Event ID', 'Device Name', 'Group', 'Event Time', 'Speed', 'Message', 'Location']
         query = f"""
             SELECT e.id, d.name, dg.title, e.created_at, e.speed, e.message,
-                   CONCAT(e.latitude, ', ', e.longitude)
+                   e.latitude, e.longitude
             FROM events e
             JOIN devices d ON e.device_id = d.id
             JOIN user_device_pivot udp ON d.id = udp.device_id AND udp.user_id = {user_id}
@@ -1282,6 +1293,8 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
             AND e.deleted = 0
             ORDER BY e.created_at DESC
         """
+        needs_geofence = True
+        location_col_indices = (6, 7)  # latitude at index 6, longitude at index 7
     elif 'vehicle status' in report_name or 'running time' in report_name:
         # Vehicle Status Report with Running Time, Idle Time, Total Duration
         # Uses traccar_devices timestamps filtered by the selected date
@@ -1392,6 +1405,38 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
 
     try:
         rows = executor.fetchall(query)
+
+        # Post-process rows to resolve geofences if needed
+        if needs_geofence and location_col_indices and rows:
+            lat_idx, lng_idx = location_col_indices
+            geofences = load_geofences_for_user(executor, user_id)
+
+            processed_rows = []
+            for row in rows:
+                row_list = list(row)
+                lat = row_list[lat_idx]
+                lng = row_list[lng_idx]
+
+                # Try to resolve geofence
+                location = ''
+                if lat and lng:
+                    try:
+                        lat_f = float(lat)
+                        lng_f = float(lng)
+                        geofence_name = find_geofence_for_point(lat_f, lng_f, geofences)
+                        if geofence_name:
+                            location = geofence_name
+                        else:
+                            location = f"{lat_f:.5f}, {lng_f:.5f}"
+                    except (ValueError, TypeError):
+                        location = f"{lat}, {lng}"
+
+                # Replace the two lat/lng columns with single location column
+                row_list = row_list[:lat_idx] + [location]
+                processed_rows.append(tuple(row_list))
+
+            return columns, processed_rows
+
         return columns, rows
     except Exception as e:
         print(f"Query error: {e}")
