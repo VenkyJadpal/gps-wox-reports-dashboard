@@ -10,6 +10,11 @@ import csv
 import json
 import uuid
 import threading
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
@@ -53,16 +58,21 @@ class JobManager:
     def __init__(self):
         JOBS_DIR.mkdir(exist_ok=True)
         self._cleanup_stale_jobs()
+        self._start_cleanup_thread()
 
     def _cleanup_stale_jobs(self):
-        """Clean up stale jobs (older than 1 hour) on startup."""
+        """Clean up stale jobs (older than 2 hours) on startup and periodically."""
         try:
             for job_file in JOBS_DIR.glob('*.json'):
                 try:
                     job = json.loads(job_file.read_text())
-                    created_at = datetime.fromisoformat(job.get('created_at', ''))
-                    age_hours = (datetime.now() - created_at).total_seconds() / 3600
-                    if age_hours > 1:
+                    # Use completed_at for finished jobs, created_at for pending/processing
+                    if job.get('completed_at'):
+                        ref_time = datetime.fromisoformat(job['completed_at'])
+                    else:
+                        ref_time = datetime.fromisoformat(job.get('created_at', ''))
+                    age_hours = (datetime.now() - ref_time).total_seconds() / 3600
+                    if age_hours > 2:
                         job_file.unlink(missing_ok=True)
                         # Also clean up result file if it exists
                         if job.get('result_file'):
@@ -72,6 +82,19 @@ class JobManager:
                     job_file.unlink(missing_ok=True)
         except Exception:
             pass  # Don't fail startup if cleanup fails
+
+    def _start_cleanup_thread(self):
+        """Start background thread to periodically clean up old jobs."""
+        import threading
+
+        def cleanup_loop():
+            while True:
+                import time
+                time.sleep(1800)  # Run every 30 minutes
+                self._cleanup_stale_jobs()
+
+        cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
+        cleanup_thread.start()
 
     def create_job(self, job_type, params):
         """Create job and return job_id."""
@@ -106,6 +129,7 @@ class JobManager:
             job['status'] = 'complete'
             job['progress'] = 100
             job['result_file'] = result_file
+            job['completed_at'] = datetime.now().isoformat()
             self._save_job(job_id, job)
         except FileNotFoundError:
             pass
@@ -116,6 +140,7 @@ class JobManager:
             job = self._load_job(job_id)
             job['status'] = 'failed'
             job['error'] = str(error)
+            job['completed_at'] = datetime.now().isoformat()
             self._save_job(job_id, job)
         except FileNotFoundError:
             pass
@@ -125,10 +150,48 @@ class JobManager:
         return self._load_job(job_id)
 
     def _save_job(self, job_id, data):
-        (JOBS_DIR / f'{job_id}.json').write_text(json.dumps(data))
+        """Atomically save job data to prevent corruption from concurrent reads."""
+        import tempfile
+        job_file = JOBS_DIR / f'{job_id}.json'
+        # Write to temp file first, then rename (atomic on POSIX)
+        fd, tmp_path = tempfile.mkstemp(dir=JOBS_DIR, suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(data, f)
+            os.replace(tmp_path, job_file)  # Atomic rename
+        except Exception:
+            # Clean up temp file on error
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def _load_job(self, job_id):
-        return json.loads((JOBS_DIR / f'{job_id}.json').read_text())
+        """Load job data with retry for transient failures."""
+        import time
+        job_file = JOBS_DIR / f'{job_id}.json'
+
+        # Retry up to 3 times with short delays for transient issues
+        max_retries = 3
+        for attempt in range(max_retries):
+            if not job_file.exists():
+                raise FileNotFoundError(f'Job {job_id} not found')
+
+            try:
+                content = job_file.read_text()
+                if content.strip():
+                    return json.loads(content)
+                # Empty file - might be mid-write, retry
+            except json.JSONDecodeError:
+                # Partial write - retry
+                pass
+
+            if attempt < max_retries - 1:
+                time.sleep(0.1)  # Brief delay before retry
+
+        # All retries failed
+        raise ValueError(f'Job file {job_id} is empty or corrupted after {max_retries} retries')
 
 
 # Initialize job manager
@@ -148,6 +211,8 @@ def load_config():
         "db_password": os.getenv("DB_PASSWORD", ""),
         "db_host": os.getenv("DB_HOST", "127.0.0.1"),
         "db_port": int(os.getenv("DB_PORT", "3306")),
+        "mail_from": os.getenv("MAIL_FROM", ""),
+        "mail_password": os.getenv("MAIL_PASSWORD", ""),
     }
 
     if config["ssh_host"]:
@@ -160,6 +225,65 @@ def load_config():
             config["ssh_user"] = "devops"
 
     return config
+
+
+def send_report_email(recipient, subject, body, attachment_path, filename):
+    """Send report as email attachment via Gmail SMTP.
+
+    Args:
+        recipient: Email address to send to
+        subject: Email subject line
+        body: Email body text
+        attachment_path: Path to the file to attach
+        filename: Name to give the attachment
+
+    Returns:
+        tuple: (success: bool, error_message: str or None)
+    """
+    config = load_config()
+    mail_from = config.get("mail_from")
+    mail_password = config.get("mail_password")
+
+    if not mail_from or not mail_password:
+        return False, "Email not configured. Set MAIL_FROM and MAIL_PASSWORD in .env"
+
+    try:
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = mail_from
+        msg['To'] = recipient
+        msg['Subject'] = subject
+
+        # Add body
+        msg.attach(MIMEText(body, 'plain'))
+
+        # Add attachment
+        attachment_path = Path(attachment_path)
+        if attachment_path.exists():
+            with open(attachment_path, 'rb') as f:
+                part = MIMEBase('application', 'octet-stream')
+                part.set_payload(f.read())
+            encoders.encode_base64(part)
+            part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
+            msg.attach(part)
+
+        # Send via Gmail SMTP with TLS
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(mail_from, mail_password)
+            server.send_message(msg)
+
+        print(f"[Email] Successfully sent report to {recipient}")
+        return True, None
+
+    except smtplib.SMTPAuthenticationError:
+        error = "SMTP authentication failed. Check MAIL_FROM and MAIL_PASSWORD in .env"
+        print(f"[Email] {error}")
+        return False, error
+    except Exception as e:
+        error = f"Failed to send email: {str(e)}"
+        print(f"[Email] {error}")
+        return False, error
 
 
 class SSHMySQLExecutor:
@@ -202,7 +326,8 @@ class SSHMySQLExecutor:
                 query = query.replace("%s", param, 1)
 
         cmd = f'sudo mysql -N -B {self.db_name} -e "{query}"'
-        stdin, stdout, stderr = self.ssh_client.exec_command(cmd)
+        # Set timeout for long-running queries (10 minutes max)
+        stdin, stdout, stderr = self.ssh_client.exec_command(cmd, timeout=600)
         output = stdout.read().decode('utf-8', errors='replace')
         error = stderr.read().decode('utf-8', errors='replace')
 
@@ -1011,14 +1136,14 @@ def export_trip_report_to_excel(trip_data, global_stats, start_date, end_date):
             stop_time = str(seg['stop_time'])[:19] if seg.get('stop_time') else ''
             duration = format_duration(seg.get('duration_seconds', 0))
 
-            # Use geofence name if available, otherwise use Google Maps link
+            # Use geofence name if available, otherwise use coordinates
             geofence_name = seg.get('geofence')
             lat = seg.get('start_lat', 0)
             lng = seg.get('start_lng', 0)
             if geofence_name:
                 address = geofence_name
             elif lat and lng:
-                address = f"https://www.google.com/maps?q={lat},{lng}"
+                address = f"{lat:.5f}, {lng:.5f}"
             else:
                 address = ''
 
@@ -1081,14 +1206,14 @@ def export_trip_report_to_csv(trip_data, global_stats, start_date, end_date):
             stop_time = str(seg['stop_time'])[:19] if seg.get('stop_time') else ''
             duration = format_duration(seg.get('duration_seconds', 0))
 
-            # Use geofence name if available, otherwise use Google Maps link
+            # Use geofence name if available, otherwise use coordinates
             geofence_name = seg.get('geofence')
             lat = seg.get('start_lat', 0)
             lng = seg.get('start_lng', 0)
             if geofence_name:
                 address = geofence_name
             elif lat and lng:
-                address = f"https://www.google.com/maps?q={lat},{lng}"
+                address = f"{lat:.5f}, {lng:.5f}"
             else:
                 address = ''
 
@@ -1507,9 +1632,10 @@ def export_to_pdf(columns, data, title="Report"):
     return output
 
 
-def run_trip_report_job(job_id, project_email, start_date, end_date, format_type):
+def run_trip_report_job(job_id, project_email, start_date, end_date, format_type, recipient_email=None):
     """Background worker for trip report generation."""
     try:
+        print(f"[Trip Report Job {job_id}] Starting for {project_email}, {start_date} to {end_date}")
         with get_db_connection() as executor:
             user = get_user_by_email(executor, project_email)
             if not user:
@@ -1533,6 +1659,7 @@ def run_trip_report_job(job_id, project_email, start_date, end_date, format_type
             job_manager.update_progress(job_id, 80, 'exporting')
 
             # Export to file
+            ext = {'csv': '.csv', 'excel': '.xlsx', 'pdf': '.pdf'}.get(format_type, '.csv')
             if format_type == 'csv':
                 result_file = JOBS_DIR / f'{job_id}.csv'
                 content = export_trip_report_to_csv(trip_data, global_stats, start_date, end_date)
@@ -1577,13 +1704,47 @@ def run_trip_report_job(job_id, project_email, start_date, end_date, format_type
                 job_manager.fail_job(job_id, f'Invalid format: {format_type}')
                 return
 
+            # Send email if recipient provided
+            email_sent = False
+            email_error = None
+            if recipient_email:
+                job_manager.update_progress(job_id, 90, 'sending_email')
+                project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
+                filename = f"Trip_Report_{start_date}_to_{end_date}{ext}"
+                subject = f"{project_name} - Trip Report ({start_date} to {end_date})"
+                body = f"""Your Trip Report is ready.
+
+Project: {project_name}
+Date Range: {start_date} to {end_date}
+Format: {format_type.upper()}
+
+The report is attached to this email.
+
+---
+GPS Report Dashboard
+"""
+                email_sent, email_error = send_report_email(
+                    recipient_email, subject, body, str(result_file), filename
+                )
+
             job_manager.complete_job(job_id, str(result_file))
+            # Store email status in job for frontend
+            job = job_manager._load_job(job_id)
+            job['email_sent'] = email_sent
+            job['email_recipient'] = recipient_email
+            job['email_error'] = email_error
+            job_manager._save_job(job_id, job)
+            print(f"[Trip Report Job {job_id}] Completed successfully (email_sent={email_sent})")
 
     except Exception as e:
-        job_manager.fail_job(job_id, str(e))
+        import traceback
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        print(f"[Trip Report Job {job_id}] FAILED: {error_msg}")
+        traceback.print_exc()
+        job_manager.fail_job(job_id, error_msg)
 
 
-def run_fleet_summary_job(job_id, project_email, start_date, end_date, format_type):
+def run_fleet_summary_job(job_id, project_email, start_date, end_date, format_type, recipient_email=None):
     """Background worker for fleet summary report generation."""
     try:
         with get_db_connection() as executor:
@@ -1609,6 +1770,7 @@ def run_fleet_summary_job(job_id, project_email, start_date, end_date, format_ty
             job_manager.update_progress(job_id, 80, 'exporting')
 
             # Export to file
+            ext = {'csv': '.csv', 'excel': '.xlsx', 'pdf': '.pdf'}.get(format_type, '.csv')
             if format_type == 'csv':
                 result_file = JOBS_DIR / f'{job_id}.csv'
                 content = export_fleet_summary_to_csv(vehicle_data, global_stats, start_date, end_date)
@@ -1646,10 +1808,115 @@ def run_fleet_summary_job(job_id, project_email, start_date, end_date, format_ty
                 job_manager.fail_job(job_id, f'Invalid format: {format_type}')
                 return
 
+            # Send email if recipient provided
+            email_sent = False
+            email_error = None
+            if recipient_email:
+                job_manager.update_progress(job_id, 90, 'sending_email')
+                project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
+                filename = f"Fleet_Summary_{start_date}_to_{end_date}{ext}"
+                subject = f"{project_name} - Fleet Summary ({start_date} to {end_date})"
+                body = f"""Your Fleet Summary Report is ready.
+
+Project: {project_name}
+Date Range: {start_date} to {end_date}
+Format: {format_type.upper()}
+
+The report is attached to this email.
+
+---
+GPS Report Dashboard
+"""
+                email_sent, email_error = send_report_email(
+                    recipient_email, subject, body, str(result_file), filename
+                )
+
             job_manager.complete_job(job_id, str(result_file))
+            # Store email status in job for frontend
+            job = job_manager._load_job(job_id)
+            job['email_sent'] = email_sent
+            job['email_recipient'] = recipient_email
+            job['email_error'] = email_error
+            job_manager._save_job(job_id, job)
 
     except Exception as e:
         job_manager.fail_job(job_id, str(e))
+
+
+def run_standard_report_job(job_id, project_email, report_id, report_name, start_date, end_date, format_type, recipient_email=None):
+    """Background worker for standard report generation (reports 1-9)."""
+    try:
+        print(f"[Standard Report Job {job_id}] Starting {report_name} for {project_email}")
+        with get_db_connection() as executor:
+            # Update progress: starting
+            job_manager.update_progress(job_id, 10, 'processing')
+
+            # Generate report data
+            columns, rows = generate_report_data(executor, project_email, report_id, start_date, end_date)
+
+            # Update progress: exporting
+            job_manager.update_progress(job_id, 80, 'exporting')
+
+            # Export to file
+            ext = {'csv': '.csv', 'excel': '.xlsx', 'pdf': '.pdf'}.get(format_type, '.csv')
+            safe_name = report_name.replace(' ', '_').replace('/', '_')
+
+            if format_type == 'csv':
+                result_file = JOBS_DIR / f'{job_id}.csv'
+                content = export_to_csv(columns, rows)
+                result_file.write_text(content)
+            elif format_type == 'excel':
+                result_file = JOBS_DIR / f'{job_id}.xlsx'
+                content = export_to_excel(columns, rows)
+                result_file.write_bytes(content.getvalue())
+            elif format_type == 'pdf':
+                result_file = JOBS_DIR / f'{job_id}.pdf'
+                project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
+                title = f"{project_name} - {report_name}\n{start_date} to {end_date}"
+                content = export_to_pdf(columns, rows, title)
+                result_file.write_bytes(content.getvalue())
+            else:
+                job_manager.fail_job(job_id, f'Invalid format: {format_type}')
+                return
+
+            # Send email if recipient provided
+            email_sent = False
+            email_error = None
+            if recipient_email:
+                job_manager.update_progress(job_id, 90, 'sending_email')
+                project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
+                filename = f"{safe_name}_{start_date}_to_{end_date}{ext}"
+                subject = f"{project_name} - {report_name} ({start_date} to {end_date})"
+                body = f"""Your {report_name} report is ready.
+
+Project: {project_name}
+Date Range: {start_date} to {end_date}
+Format: {format_type.upper()}
+
+The report is attached to this email.
+
+---
+GPS Report Dashboard
+"""
+                email_sent, email_error = send_report_email(
+                    recipient_email, subject, body, str(result_file), filename
+                )
+
+            job_manager.complete_job(job_id, str(result_file))
+            # Store email status in job for frontend
+            job = job_manager._load_job(job_id)
+            job['email_sent'] = email_sent
+            job['email_recipient'] = recipient_email
+            job['email_error'] = email_error
+            job_manager._save_job(job_id, job)
+            print(f"[Standard Report Job {job_id}] Completed successfully (email_sent={email_sent})")
+
+    except Exception as e:
+        import traceback
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        print(f"[Standard Report Job {job_id}] FAILED: {error_msg}")
+        traceback.print_exc()
+        job_manager.fail_job(job_id, error_msg)
 
 
 def login_required(f):
@@ -1772,35 +2039,35 @@ def debug_vehicle_status(project_email):
 @app.route('/api/generate', methods=['POST'])
 @login_required
 def generate_report():
-    """Generate and download a report."""
+    """Generate and download a report. All reports run in background queue."""
     data = request.json
     project_email = data.get('project')
     report_id = int(data.get('report_id'))
     start_date = data.get('start_date')
     end_date = data.get('end_date')
     format_type = data.get('format', 'csv')
+    recipient_email = data.get('email', '').strip() or None
 
     # Get report name for filename
     reports = REPORTS.get(project_email, [])
     report_info = next((r for r in reports if r['id'] == report_id), None)
     report_name = report_info['name'] if report_info else 'report'
 
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    safe_name = report_name.replace(' ', '_').replace('/', '_')
-
-    # Special handling for Trip Report - use background processing
+    # All reports now go through background job queue
     if report_id == 10:  # Trip Report
         job_id = job_manager.create_job('trip_report', {
             'project': project_email,
+            'report_name': report_name,
             'start_date': start_date,
             'end_date': end_date,
-            'format': format_type
+            'format': format_type,
+            'email': recipient_email
         })
 
         # Start background thread
         thread = threading.Thread(
             target=run_trip_report_job,
-            args=(job_id, project_email, start_date, end_date, format_type)
+            args=(job_id, project_email, start_date, end_date, format_type, recipient_email)
         )
         thread.daemon = True
         thread.start()
@@ -1811,19 +2078,20 @@ def generate_report():
             'message': 'Trip report generation started in background'
         })
 
-    # Special handling for Fleet Summary Report - use background processing
-    if report_id == 11:  # Fleet Summary
+    elif report_id == 11:  # Fleet Summary
         job_id = job_manager.create_job('fleet_summary', {
             'project': project_email,
+            'report_name': report_name,
             'start_date': start_date,
             'end_date': end_date,
-            'format': format_type
+            'format': format_type,
+            'email': recipient_email
         })
 
         # Start background thread
         thread = threading.Thread(
             target=run_fleet_summary_job,
-            args=(job_id, project_email, start_date, end_date, format_type)
+            args=(job_id, project_email, start_date, end_date, format_type, recipient_email)
         )
         thread.daemon = True
         thread.start()
@@ -1834,40 +2102,30 @@ def generate_report():
             'message': 'Fleet Summary report generation started in background'
         })
 
-    # Standard report handling
-    try:
-        with get_db_connection() as executor:
-            columns, rows = generate_report_data(executor, project_email, report_id, start_date, end_date)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    else:  # Standard reports (1-9)
+        job_id = job_manager.create_job('standard_report', {
+            'project': project_email,
+            'report_id': report_id,
+            'report_name': report_name,
+            'start_date': start_date,
+            'end_date': end_date,
+            'format': format_type,
+            'email': recipient_email
+        })
 
-    if format_type == 'csv':
-        content = export_to_csv(columns, rows)
-        return Response(
-            content,
-            mimetype='text/csv',
-            headers={'Content-Disposition': f'attachment; filename={safe_name}_{timestamp}.csv'}
+        # Start background thread
+        thread = threading.Thread(
+            target=run_standard_report_job,
+            args=(job_id, project_email, report_id, report_name, start_date, end_date, format_type, recipient_email)
         )
-    elif format_type == 'excel':
-        content = export_to_excel(columns, rows)
-        return send_file(
-            content,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            as_attachment=True,
-            download_name=f'{safe_name}_{timestamp}.xlsx'
-        )
-    elif format_type == 'pdf':
-        project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
-        title = f"{project_name} - {report_name}\n{start_date} to {end_date}"
-        content = export_to_pdf(columns, rows, title)
-        return send_file(
-            content,
-            mimetype='application/pdf',
-            as_attachment=True,
-            download_name=f'{safe_name}_{timestamp}.pdf'
-        )
+        thread.daemon = True
+        thread.start()
 
-    return jsonify({'error': 'Invalid format'}), 400
+        return jsonify({
+            'job_id': job_id,
+            'status': 'queued',
+            'message': f'{report_name} generation started in background'
+        })
 
 
 @app.route('/api/job-status/<job_id>')

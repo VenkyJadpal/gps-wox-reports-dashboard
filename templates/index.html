@@ -195,6 +195,30 @@
                 </div>
             </div>
 
+            <!-- Email Section (shown when date range > 1 day) -->
+            <div id="email-section" class="hidden mb-6 p-4 rounded-lg"
+                style="background: var(--secondary); border: 1px solid var(--border);">
+                <div class="flex items-start gap-3">
+                    <svg class="w-5 h-5 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: var(--muted-foreground);">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    <div class="flex-grow">
+                        <label for="recipient_email" class="block text-sm font-medium mb-2" style="color: var(--foreground);">
+                            Email Address (optional)
+                        </label>
+                        <p class="text-xs mb-3" style="color: var(--muted-foreground);">
+                            Large date range detected. Report will be generated in the background.
+                            Enter your email to receive the report when ready, or leave blank to download directly.
+                        </p>
+                        <input type="email" id="recipient_email"
+                            placeholder="your@email.com"
+                            class="w-full px-3 py-2 rounded-lg text-sm transition-colors"
+                            style="background: var(--background); border: 1px solid var(--border);">
+                    </div>
+                </div>
+            </div>
+
             <!-- Report Description -->
             <div id="report-description" class="hidden mb-6 p-4 rounded-lg"
                 style="background: var(--secondary); border: 1px solid var(--border);">
@@ -876,6 +900,32 @@
         const crActions = document.getElementById('cr-actions');
         const btnExportCrossref = document.getElementById('btn-export-crossref');
 
+        // Email section elements
+        const emailSection = document.getElementById('email-section');
+        const recipientEmail = document.getElementById('recipient_email');
+
+        // Check date range and show/hide email section
+        function checkDateRange() {
+            if (!startDate.value || !endDate.value) {
+                emailSection.classList.add('hidden');
+                return;
+            }
+            const start = new Date(startDate.value);
+            const end = new Date(endDate.value);
+            const diffDays = (end - start) / (1000 * 60 * 60 * 24);
+
+            if (diffDays > 1) {
+                emailSection.classList.remove('hidden');
+            } else {
+                emailSection.classList.add('hidden');
+                recipientEmail.value = ''; // Clear email when hidden
+            }
+        }
+
+        // Add date change listeners
+        startDate.addEventListener('change', checkDateRange);
+        endDate.addEventListener('change', checkDateRange);
+
         // Theme toggle
         themeToggle.addEventListener('click', () => {
             isDark = !isDark;
@@ -1185,49 +1235,23 @@
                         report_id: reportSelect.value,
                         start_date: startDate.value,
                         end_date: endDate.value,
-                        format: format
+                        format: format,
+                        email: recipientEmail.value.trim()
                     })
                 });
 
-                // Check content type to determine how to handle response
-                const contentType = response.headers.get('Content-Type') || '';
+                // All reports now return JSON with job_id
+                const data = await response.json();
 
-                if (contentType.includes('application/json')) {
-                    // JSON response - either a job ID (Trip Report) or an error
-                    const data = await response.json();
+                if (data.job_id) {
+                    // Background job started - poll for completion
+                    showLoading(false);
+                    pollJobStatus(data.job_id, format, recipientEmail.value.trim());
+                    return;
+                }
 
-                    if (data.job_id) {
-                        // Background job started - poll for completion
-                        showLoading(false);
-                        pollJobStatus(data.job_id, format);
-                        return;
-                    }
-
-                    if (data.error) {
-                        throw new Error(data.error);
-                    }
-                } else {
-                    // Blob response - direct file download (non-Trip reports)
-                    if (!response.ok) {
-                        throw new Error('Failed to generate report');
-                    }
-
-                    const contentDisposition = response.headers.get('Content-Disposition');
-                    let filename = `report.${format === 'excel' ? 'xlsx' : format}`;
-                    if (contentDisposition) {
-                        const match = contentDisposition.match(/filename=(.+)/);
-                        if (match) filename = match[1];
-                    }
-
-                    const blob = await response.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    a.remove();
+                if (data.error) {
+                    throw new Error(data.error);
                 }
 
             } catch (err) {
@@ -1243,7 +1267,7 @@
         const jobProgressText = document.getElementById('job-progress-text');
         const jobProgressStatus = document.getElementById('job-progress-status');
 
-        async function pollJobStatus(jobId, format) {
+        async function pollJobStatus(jobId, format, email = '') {
             // Show progress bar
             jobProgressDiv.classList.remove('hidden');
             jobProgressBar.style.width = '0%';
@@ -1270,19 +1294,46 @@
                         jobProgressStatus.textContent = 'Processing device data...';
                     } else if (status.status === 'exporting') {
                         jobProgressStatus.textContent = 'Exporting report file...';
+                    } else if (status.status === 'sending_email') {
+                        jobProgressStatus.textContent = 'Sending email...';
                     }
 
                     if (status.status === 'complete') {
-                        jobProgressStatus.textContent = 'Complete! Downloading...';
-                        // Download the file
-                        window.location.href = `/api/job-download/${jobId}`;
-                        // Hide progress bar after a short delay
+                        // Check if email was sent
+                        if (status.email_sent && status.email_recipient) {
+                            jobProgressStatus.textContent = `Complete! Report emailed successfully to ${status.email_recipient}`;
+                            jobProgressBar.style.background = '#10b981'; // Green
+                            // Still offer download link
+                            setTimeout(() => {
+                                if (confirm('Report emailed successfully! Do you also want to download a copy?')) {
+                                    window.location.href = `/api/job-download/${jobId}`;
+                                }
+                                jobProgressDiv.classList.add('hidden');
+                            }, 1500);
+                        } else if (status.email_error) {
+                            // Email failed, but report was generated
+                            jobProgressStatus.textContent = `Complete! (Email failed: ${status.email_error}) Downloading...`;
+                            jobProgressBar.style.background = '#f59e0b'; // Amber warning
+                            window.location.href = `/api/job-download/${jobId}`;
+                            setTimeout(() => {
+                                jobProgressDiv.classList.add('hidden');
+                            }, 3000);
+                        } else {
+                            // No email requested, just download
+                            jobProgressStatus.textContent = 'Complete! Downloading...';
+                            window.location.href = `/api/job-download/${jobId}`;
+                            setTimeout(() => {
+                                jobProgressDiv.classList.add('hidden');
+                            }, 2000);
+                        }
+                    } else if (status.status === 'failed') {
+                        jobProgressBar.style.background = '#ef4444'; // Red
+                        jobProgressBar.style.width = '100%';
+                        jobProgressStatus.textContent = `Failed! Job ID: ${jobId}. Please contact admin.`;
+                        showError(`Report generation failed. Job ID: ${jobId}. Please contact admin.`);
                         setTimeout(() => {
                             jobProgressDiv.classList.add('hidden');
-                        }, 2000);
-                    } else if (status.status === 'failed') {
-                        showError(status.error || 'Report generation failed');
-                        jobProgressDiv.classList.add('hidden');
+                        }, 5000);
                     } else {
                         // Continue polling every second
                         setTimeout(poll, 1000);
