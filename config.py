@@ -63,6 +63,7 @@ PHASE3_PKG8_REPORTS = STANDARD_REPORTS + [
     {"id": 7, "name": "SOS Alert Report", "description": "SOS emergency alerts"},
     {"id": 8, "name": "Harsh Braking Report", "description": "Harsh braking events"},
     {"id": 9, "name": "Harsh Acceleration Report", "description": "Harsh acceleration events"},
+    {"id": 11, "name": "Fleet Summary Report", "description": "Daily fleet summary with vehicle times, distances, and event counts"},
 ]
 
 # All projects use standard reports, except phase3-pkg8 which has seatbelt

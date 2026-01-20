@@ -7,6 +7,9 @@ A web dashboard for extracting and downloading reports from the database.
 import os
 import io
 import csv
+import json
+import uuid
+import threading
 from datetime import datetime
 from pathlib import Path
 from contextlib import contextmanager
@@ -39,6 +42,97 @@ app.secret_key = secrets.token_hex(32)
 # Hardcoded credentials (no database required)
 ADMIN_EMAIL = "admin@wakecap.com"
 ADMIN_PASSWORD = "wakecap@2026!"
+
+# Background job storage directory
+JOBS_DIR = Path('/tmp/gps_report_jobs')
+
+
+class JobManager:
+    """Manage background report generation jobs with file-based persistence."""
+
+    def __init__(self):
+        JOBS_DIR.mkdir(exist_ok=True)
+        self._cleanup_stale_jobs()
+
+    def _cleanup_stale_jobs(self):
+        """Clean up stale jobs (older than 1 hour) on startup."""
+        try:
+            for job_file in JOBS_DIR.glob('*.json'):
+                try:
+                    job = json.loads(job_file.read_text())
+                    created_at = datetime.fromisoformat(job.get('created_at', ''))
+                    age_hours = (datetime.now() - created_at).total_seconds() / 3600
+                    if age_hours > 1:
+                        job_file.unlink(missing_ok=True)
+                        # Also clean up result file if it exists
+                        if job.get('result_file'):
+                            Path(job['result_file']).unlink(missing_ok=True)
+                except (json.JSONDecodeError, ValueError, KeyError):
+                    # Invalid job file, remove it
+                    job_file.unlink(missing_ok=True)
+        except Exception:
+            pass  # Don't fail startup if cleanup fails
+
+    def create_job(self, job_type, params):
+        """Create job and return job_id."""
+        job_id = str(uuid.uuid4())[:8]
+        job_data = {
+            'id': job_id,
+            'type': job_type,
+            'params': params,
+            'status': 'pending',
+            'progress': 0,
+            'created_at': datetime.now().isoformat(),
+            'error': None,
+            'result_file': None
+        }
+        self._save_job(job_id, job_data)
+        return job_id
+
+    def update_progress(self, job_id, progress, status='processing'):
+        """Update job progress (0-100)."""
+        try:
+            job = self._load_job(job_id)
+            job['progress'] = progress
+            job['status'] = status
+            self._save_job(job_id, job)
+        except FileNotFoundError:
+            pass  # Job might have been cleaned up
+
+    def complete_job(self, job_id, result_file):
+        """Mark job as complete with result file path."""
+        try:
+            job = self._load_job(job_id)
+            job['status'] = 'complete'
+            job['progress'] = 100
+            job['result_file'] = result_file
+            self._save_job(job_id, job)
+        except FileNotFoundError:
+            pass
+
+    def fail_job(self, job_id, error):
+        """Mark job as failed."""
+        try:
+            job = self._load_job(job_id)
+            job['status'] = 'failed'
+            job['error'] = str(error)
+            self._save_job(job_id, job)
+        except FileNotFoundError:
+            pass
+
+    def get_status(self, job_id):
+        """Get job status."""
+        return self._load_job(job_id)
+
+    def _save_job(self, job_id, data):
+        (JOBS_DIR / f'{job_id}.json').write_text(json.dumps(data))
+
+    def _load_job(self, job_id):
+        return json.loads((JOBS_DIR / f'{job_id}.json').read_text())
+
+
+# Initialize job manager
+job_manager = JobManager()
 
 
 def load_config():
@@ -274,7 +368,7 @@ def find_geofence_for_point(lat, lng, geofences):
     return None
 
 
-def generate_trip_report_data(executor, user_id, start_date, end_date):
+def generate_trip_report_data(executor, user_id, start_date, end_date, progress_callback=None):
     """
     Generate trip report data showing vehicle states (parked, idle, run).
 
@@ -282,6 +376,13 @@ def generate_trip_report_data(executor, user_id, start_date, end_date):
     Each vehicle section contains:
     - Vehicle summary (name, total trip time, total idle time, total distance)
     - Trip segments with start/stop times, duration, location/geofence, distance, avg speed, state
+
+    Args:
+        executor: Database executor
+        user_id: User ID
+        start_date: Start date (YYYY-MM-DD)
+        end_date: End date (YYYY-MM-DD)
+        progress_callback: Optional callback function(progress) where progress is 0.0-1.0
     """
     import re
     from datetime import timedelta
@@ -317,7 +418,11 @@ def generate_trip_report_data(executor, user_id, start_date, end_date):
         'total_distance': 0.0
     }
 
-    for device in devices:
+    total_devices = len(devices)
+    for idx, device in enumerate(devices):
+        # Report progress
+        if progress_callback:
+            progress_callback(idx / total_devices)
         device_id, device_name, imei, group_name = device
 
         # Query positions from device-specific table in gpswox_traccar
@@ -495,6 +600,375 @@ def format_duration(seconds):
         return f"{days}:{hours:02d}:{minutes:02d}:{secs:02d}"
     else:
         return f"{hours}:{minutes:02d}:{secs:02d}"
+
+
+def format_hours(seconds):
+    """Format seconds into decimal hours (e.g., 11.848333)."""
+    if not seconds or seconds < 0:
+        return 0
+    return round(seconds / 3600, 6)
+
+
+def generate_fleet_summary_data(executor, user_id, start_date, end_date, progress_callback=None):
+    """
+    Generate fleet summary report data matching the reference Excel format.
+
+    Returns:
+        tuple: (vehicle_data, global_stats) where:
+            - vehicle_data: List of per-vehicle dictionaries with trip metrics
+            - global_stats: Dictionary with totals for all vehicles
+
+    The report includes per-vehicle:
+        - Vehicle Info (name)
+        - Start Time, Stop Time (first ignition on to last ignition off)
+        - Driver TimeSheet (total hours from first to last position)
+        - Total Idle Time (hours engine on but not moving)
+        - Total Trip Time (hours actually moving)
+        - Total Trip Distance (km)
+        - Start Odometer, End Odometer (cumulative distance)
+        - Event counts: H-Acceleration, H-Brake, SeatBelt, SOS
+    """
+    from datetime import timedelta
+
+    # Speed threshold for determining moving vs idle (km/h)
+    SPEED_THRESHOLD = 2.0
+
+    # Get all devices for this user
+    devices_query = f"""
+        SELECT d.id, d.name, d.imei, dg.title as group_name
+        FROM devices d
+        JOIN user_device_pivot udp ON d.id = udp.device_id
+        LEFT JOIN device_groups dg ON udp.group_id = dg.id
+        WHERE udp.user_id = {user_id} AND d.deleted = 0
+        ORDER BY d.name
+    """
+    devices = executor.fetchall(devices_query)
+
+    if not devices:
+        return [], {}
+
+    # Get event counts for all devices in one query
+    # Note: Removed type='custom' filter - events may have different types (alarm, driver, etc.)
+    # Using message patterns to identify event types instead
+    events_query = f"""
+        SELECT
+            e.device_id,
+            SUM(CASE WHEN UPPER(e.message) LIKE '%ACCELERATION%' OR UPPER(e.message) LIKE '%ACCEL%' THEN 1 ELSE 0 END) as h_accel,
+            SUM(CASE WHEN UPPER(e.message) LIKE '%BREAK%' OR UPPER(e.message) LIKE '%BRAK%' OR UPPER(e.message) LIKE '%HARSH%BRAKE%' THEN 1 ELSE 0 END) as h_brake,
+            SUM(CASE WHEN UPPER(e.message) LIKE '%SEATBELT%' OR UPPER(e.message) LIKE '%SEAT BELT%' OR UPPER(e.message) LIKE '%SEAT%BELT%' THEN 1 ELSE 0 END) as seatbelt,
+            SUM(CASE WHEN UPPER(e.message) = 'SOS' OR UPPER(e.message) LIKE '%SOS%' THEN 1 ELSE 0 END) as sos
+        FROM events e
+        JOIN devices d ON e.device_id = d.id
+        JOIN user_device_pivot udp ON d.id = udp.device_id AND udp.user_id = {user_id}
+        WHERE e.created_at BETWEEN '{start_date} 00:00:00' AND '{end_date} 23:59:59'
+        AND e.deleted = 0
+        GROUP BY e.device_id
+    """
+    try:
+        event_rows = executor.fetchall(events_query)
+        events_by_device = {int(r[0]): {'h_accel': int(r[1] or 0), 'h_brake': int(r[2] or 0),
+                                         'seatbelt': int(r[3] or 0), 'sos': int(r[4] or 0)}
+                           for r in event_rows}
+    except Exception as e:
+        print(f"Warning: Failed to fetch events: {e}")
+        events_by_device = {}
+
+    all_vehicle_data = []
+    global_stats = {
+        'period_start': start_date,
+        'period_end': end_date,
+        'total_vehicles': 0,
+        'total_seatbelt': 0,
+        'total_sos': 0,
+        'total_h_brake': 0,
+        'total_h_accel': 0
+    }
+
+    total_devices = len(devices)
+    for idx, device in enumerate(devices):
+        # Report progress
+        if progress_callback:
+            progress_callback(idx / total_devices)
+
+        device_id, device_name, imei, group_name = device
+
+        # Query historical cumulative distance (start odometer)
+        historical_dist_query = f"""
+            SELECT COALESCE(SUM(distance), 0) as total_dist
+            FROM gpswox_traccar.positions_{device_id}
+            WHERE time < '{start_date} 00:00:00'
+        """
+
+        try:
+            hist_result = executor.fetchone(historical_dist_query)
+            historical_distance = float(hist_result[0]) if hist_result and hist_result[0] else 0
+        except Exception:
+            historical_distance = 0
+
+        # Query positions from device-specific table
+        positions_query = f"""
+            SELECT
+                time,
+                speed,
+                distance,
+                EXTRACTVALUE(other, '//ignition') as ignition
+            FROM gpswox_traccar.positions_{device_id}
+            WHERE time BETWEEN '{start_date} 00:00:00' AND '{end_date} 23:59:59'
+            ORDER BY time ASC
+        """
+
+        try:
+            positions = executor.fetchall(positions_query)
+        except Exception:
+            # Table might not exist for this device
+            continue
+
+        if not positions:
+            # Device had no data for this period - include with zeros
+            device_events = events_by_device.get(device_id, {'h_accel': 0, 'h_brake': 0, 'seatbelt': 0, 'sos': 0})
+            all_vehicle_data.append({
+                'device_id': device_id,
+                'device_name': device_name,
+                'imei': imei,
+                'group': group_name,
+                'start_time': None,
+                'stop_time': None,
+                'driver_timesheet': 0,
+                'total_idle_time': 0,
+                'total_trip_time': 0,
+                'total_trip_distance': 0,
+                'start_odometer': None,
+                'end_odometer': None,
+                'h_acceleration': device_events['h_accel'],
+                'h_brake': device_events['h_brake'],
+                'seatbelt': device_events['seatbelt'],
+                'sos': device_events['sos']
+            })
+            global_stats['total_vehicles'] += 1
+            global_stats['total_seatbelt'] += device_events['seatbelt']
+            global_stats['total_sos'] += device_events['sos']
+            global_stats['total_h_brake'] += device_events['h_brake']
+            global_stats['total_h_accel'] += device_events['h_accel']
+            continue
+
+        # Process positions
+        start_time = None
+        stop_time = None
+        total_idle_seconds = 0
+        total_trip_seconds = 0
+        total_distance = 0
+        cumulative_distance = 0  # Running total for today's distance
+        start_odometer = historical_distance  # Start odometer is cumulative before today
+        end_odometer = historical_distance  # Will be updated as we process positions
+
+        prev_time = None
+        prev_ignition = None
+
+        for pos in positions:
+            pos_time, speed, distance, ignition = pos
+
+            # Parse values
+            try:
+                speed = float(speed) if speed else 0.0
+                distance = float(distance) if distance else 0.0
+            except (ValueError, TypeError):
+                speed = 0.0
+                distance = 0.0
+
+            ignition_on = str(ignition).lower() == 'true'
+
+            # Track cumulative distance for odometer
+            cumulative_distance += distance
+
+            # Update end odometer (historical + today's cumulative)
+            end_odometer = historical_distance + cumulative_distance
+
+            # Track first and last ignition-on times
+            if ignition_on:
+                if start_time is None:
+                    start_time = pos_time
+                stop_time = pos_time
+
+            # Calculate time deltas if we have a previous position
+            if prev_time is not None:
+                try:
+                    curr_dt = datetime.strptime(str(pos_time)[:19], '%Y-%m-%d %H:%M:%S')
+                    prev_dt = datetime.strptime(str(prev_time)[:19], '%Y-%m-%d %H:%M:%S')
+                    delta_seconds = (curr_dt - prev_dt).total_seconds()
+
+                    # Only count time when ignition was on
+                    if prev_ignition:
+                        if speed > SPEED_THRESHOLD:
+                            total_trip_seconds += delta_seconds
+                        else:
+                            total_idle_seconds += delta_seconds
+                except (ValueError, TypeError):
+                    pass
+
+            # Add distance when moving
+            if speed > SPEED_THRESHOLD:
+                total_distance += distance
+
+            prev_time = pos_time
+            prev_ignition = ignition_on
+
+        # Calculate driver timesheet (total time from first to last position with ignition)
+        driver_timesheet_seconds = 0
+        if start_time and stop_time:
+            try:
+                start_dt = datetime.strptime(str(start_time)[:19], '%Y-%m-%d %H:%M:%S')
+                stop_dt = datetime.strptime(str(stop_time)[:19], '%Y-%m-%d %H:%M:%S')
+                driver_timesheet_seconds = (stop_dt - start_dt).total_seconds()
+            except (ValueError, TypeError):
+                pass
+
+        # Get event counts for this device (convert device_id to int for lookup)
+        device_events = events_by_device.get(int(device_id), {'h_accel': 0, 'h_brake': 0, 'seatbelt': 0, 'sos': 0})
+
+        # Add to results
+        all_vehicle_data.append({
+            'device_id': device_id,
+            'device_name': device_name,
+            'imei': imei,
+            'group': group_name,
+            'start_time': start_time,
+            'stop_time': stop_time,
+            'driver_timesheet': driver_timesheet_seconds,
+            'total_idle_time': total_idle_seconds,
+            'total_trip_time': total_trip_seconds,
+            'total_trip_distance': total_distance,
+            'start_odometer': start_odometer,
+            'end_odometer': end_odometer,
+            'h_acceleration': device_events['h_accel'],
+            'h_brake': device_events['h_brake'],
+            'seatbelt': device_events['seatbelt'],
+            'sos': device_events['sos']
+        })
+
+        # Update global stats
+        global_stats['total_vehicles'] += 1
+        global_stats['total_seatbelt'] += device_events['seatbelt']
+        global_stats['total_sos'] += device_events['sos']
+        global_stats['total_h_brake'] += device_events['h_brake']
+        global_stats['total_h_accel'] += device_events['h_accel']
+
+    return all_vehicle_data, global_stats
+
+
+def export_fleet_summary_to_excel(vehicle_data, global_stats, start_date, end_date):
+    """Export fleet summary report to Excel matching the reference format."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Fleet Summary"
+
+    # Header row with period and event totals
+    # Row 1: Period start, Total SeatBelt, Total H-Break
+    ws.append([
+        'Period start:', f'{start_date} 00:00:00', None, None,
+        'Total SeatBelt :', global_stats['total_seatbelt'], None, None, None,
+        'Total H-Break:', global_stats['total_h_brake']
+    ])
+
+    # Row 2: Period end, Total SOS, Total H-Accel
+    ws.append([
+        'Period end:', f'{end_date} 00:00:00', None, None,
+        'Total SOS:', global_stats['total_sos'], None, None, None,
+        'Total H-Accel:', global_stats['total_h_accel']
+    ])
+
+    # Row 3: Total vehicles
+    ws.append(['Total vehicles:', global_stats['total_vehicles']])
+
+    # Row 4: Event Count header
+    ws.append([None] * 9 + ['Event Count'])
+
+    # Row 5: Column headers
+    ws.append([
+        'Vehicle Info', 'Start Time', 'Stop Time', 'Driver TimeSheet',
+        'Total Idle Time', 'Total Trip Time', 'Total Trip Distance',
+        'Start Odomenter', 'End Odometer', 'H-Acceleration', 'H-Brake', 'SeatBelt', 'SOS'
+    ])
+
+    # Data rows
+    for vehicle in vehicle_data:
+        start_time = str(vehicle['start_time'])[:19] if vehicle.get('start_time') else None
+        stop_time = str(vehicle['stop_time'])[:19] if vehicle.get('stop_time') else None
+
+        ws.append([
+            vehicle['device_name'],
+            start_time,
+            stop_time,
+            format_hours(vehicle['driver_timesheet']) if vehicle['driver_timesheet'] else None,
+            format_hours(vehicle['total_idle_time']) if vehicle['total_idle_time'] else 0,
+            format_hours(vehicle['total_trip_time']) if vehicle['total_trip_time'] else 0,
+            round(vehicle['total_trip_distance'], 6) if vehicle['total_trip_distance'] else 0,
+            round(vehicle['start_odometer'], 6) if vehicle.get('start_odometer') else None,
+            round(vehicle['end_odometer'], 6) if vehicle.get('end_odometer') else None,
+            vehicle['h_acceleration'],
+            vehicle['h_brake'],
+            vehicle['seatbelt'],
+            vehicle['sos']
+        ])
+
+    # Save to BytesIO
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output
+
+
+def export_fleet_summary_to_csv(vehicle_data, global_stats, start_date, end_date):
+    """Export fleet summary report to CSV format."""
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header rows
+    writer.writerow([
+        'Period start:', f'{start_date} 00:00:00', '', '',
+        'Total SeatBelt :', global_stats['total_seatbelt'], '', '', '',
+        'Total H-Break:', global_stats['total_h_brake']
+    ])
+    writer.writerow([
+        'Period end:', f'{end_date} 00:00:00', '', '',
+        'Total SOS:', global_stats['total_sos'], '', '', '',
+        'Total H-Accel:', global_stats['total_h_accel']
+    ])
+    writer.writerow(['Total vehicles:', global_stats['total_vehicles']])
+    writer.writerow([''] * 9 + ['Event Count'])
+
+    # Column headers
+    writer.writerow([
+        'Vehicle Info', 'Start Time', 'Stop Time', 'Driver TimeSheet',
+        'Total Idle Time', 'Total Trip Time', 'Total Trip Distance',
+        'Start Odomenter', 'End Odometer', 'H-Acceleration', 'H-Brake', 'SeatBelt', 'SOS'
+    ])
+
+    # Data rows
+    for vehicle in vehicle_data:
+        start_time = str(vehicle['start_time'])[:19] if vehicle.get('start_time') else ''
+        stop_time = str(vehicle['stop_time'])[:19] if vehicle.get('stop_time') else ''
+
+        writer.writerow([
+            vehicle['device_name'],
+            start_time,
+            stop_time,
+            format_hours(vehicle['driver_timesheet']) if vehicle['driver_timesheet'] else '',
+            format_hours(vehicle['total_idle_time']) if vehicle['total_idle_time'] else 0,
+            format_hours(vehicle['total_trip_time']) if vehicle['total_trip_time'] else 0,
+            round(vehicle['total_trip_distance'], 6) if vehicle['total_trip_distance'] else 0,
+            round(vehicle['start_odometer'], 6) if vehicle.get('start_odometer') else '',
+            round(vehicle['end_odometer'], 6) if vehicle.get('end_odometer') else '',
+            vehicle['h_acceleration'],
+            vehicle['h_brake'],
+            vehicle['seatbelt'],
+            vehicle['sos']
+        ])
+
+    output.seek(0)
+    return output.getvalue()
 
 
 def export_trip_report_to_excel(trip_data, global_stats, start_date, end_date):
@@ -711,17 +1185,17 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
             JOIN devices d ON e.device_id = d.id
             JOIN user_device_pivot udp ON d.id = udp.device_id AND udp.user_id = {user_id}
             LEFT JOIN device_groups dg ON udp.group_id = dg.id
-            WHERE e.type = 'custom'
-            AND UPPER(e.message) = 'SOS'
+            WHERE (UPPER(e.message) = 'SOS' OR UPPER(e.message) LIKE '%SOS%')
             AND e.created_at BETWEEN '{start_date}' AND '{end_date} 23:59:59'
             AND e.deleted = 0
             ORDER BY e.created_at DESC
         """
     elif 'harsh' in report_name or 'acceleration' in report_name or 'braking' in report_name:
         if 'acceleration' in report_name:
-            event_filter = "UPPER(e.message) LIKE '%ACCELERATION%'"
+            event_filter = "(UPPER(e.message) LIKE '%ACCELERATION%' OR UPPER(e.message) LIKE '%ACCEL%')"
         else:
-            event_filter = "(UPPER(e.message) LIKE '%BREAKING%' OR UPPER(e.message) LIKE '%BRAKING%')"
+            # Match HARSH BREAKING, HARSH BRAKING, BRAKE, BRAKING, etc.
+            event_filter = "(UPPER(e.message) LIKE '%BREAK%' OR UPPER(e.message) LIKE '%BRAK%' OR UPPER(e.message) LIKE '%HARSH%BRAKE%')"
         columns = ['Event ID', 'Device Name', 'Group', 'Event Time', 'Speed', 'Message', 'Location']
         query = f"""
             SELECT e.id, d.name, dg.title, e.created_at, e.speed, e.message,
@@ -730,8 +1204,7 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
             JOIN devices d ON e.device_id = d.id
             JOIN user_device_pivot udp ON d.id = udp.device_id AND udp.user_id = {user_id}
             LEFT JOIN device_groups dg ON udp.group_id = dg.id
-            WHERE e.type = 'custom'
-            AND {event_filter}
+            WHERE {event_filter}
             AND e.created_at BETWEEN '{start_date}' AND '{end_date} 23:59:59'
             AND e.deleted = 0
             ORDER BY e.created_at DESC
@@ -804,8 +1277,7 @@ def generate_report_data(executor, project_email, report_id, start_date, end_dat
             JOIN devices d ON e.device_id = d.id
             JOIN user_device_pivot udp ON d.id = udp.device_id AND udp.user_id = {user_id}
             LEFT JOIN device_groups dg ON udp.group_id = dg.id
-            WHERE e.type = 'custom'
-            AND (UPPER(e.message) LIKE '%SEATBELT%' OR UPPER(e.message) LIKE '%SEAT BELT%')
+            WHERE (UPPER(e.message) LIKE '%SEATBELT%' OR UPPER(e.message) LIKE '%SEAT BELT%' OR UPPER(e.message) LIKE '%SEAT%BELT%')
             AND e.created_at BETWEEN '{start_date}' AND '{end_date} 23:59:59'
             AND e.deleted = 0
             ORDER BY e.created_at DESC
@@ -990,6 +1462,151 @@ def export_to_pdf(columns, data, title="Report"):
     return output
 
 
+def run_trip_report_job(job_id, project_email, start_date, end_date, format_type):
+    """Background worker for trip report generation."""
+    try:
+        with get_db_connection() as executor:
+            user = get_user_by_email(executor, project_email)
+            if not user:
+                job_manager.fail_job(job_id, 'Project not found')
+                return
+
+            # Update progress: starting
+            job_manager.update_progress(job_id, 10, 'processing')
+
+            # Generate trip data with progress callbacks
+            def progress_cb(p):
+                # Map progress 0-1 to 10-80 range
+                job_manager.update_progress(job_id, 10 + int(p * 70), 'processing')
+
+            trip_data, global_stats = generate_trip_report_data(
+                executor, user['id'], start_date, end_date,
+                progress_callback=progress_cb
+            )
+
+            # Update progress: exporting
+            job_manager.update_progress(job_id, 80, 'exporting')
+
+            # Export to file
+            if format_type == 'csv':
+                result_file = JOBS_DIR / f'{job_id}.csv'
+                content = export_trip_report_to_csv(trip_data, global_stats, start_date, end_date)
+                result_file.write_text(content)
+            elif format_type == 'excel':
+                result_file = JOBS_DIR / f'{job_id}.xlsx'
+                content = export_trip_report_to_excel(trip_data, global_stats, start_date, end_date)
+                result_file.write_bytes(content.getvalue())
+            elif format_type == 'pdf':
+                # For PDF, convert to flat table format
+                columns = ['Vehicle', 'Start Time', 'Stop Time', 'Duration', 'Location', 'Distance', 'Avg Speed', 'State']
+                rows = []
+                for vehicle in trip_data:
+                    for seg in vehicle['segments']:
+                        geofence_name = seg.get('geofence')
+                        lat = seg.get('start_lat', 0)
+                        lng = seg.get('start_lng', 0)
+                        if geofence_name:
+                            location = geofence_name
+                        elif lat and lng:
+                            location = f"{lat:.4f}, {lng:.4f}"
+                        else:
+                            location = ''
+
+                        rows.append([
+                            vehicle['device_name'],
+                            str(seg['start_time'])[:19] if seg.get('start_time') else '',
+                            str(seg['stop_time'])[:19] if seg.get('stop_time') else '',
+                            format_duration(seg.get('duration_seconds', 0)),
+                            location,
+                            round(seg.get('distance', 0), 2) if seg.get('state') == 'run' else '',
+                            round(seg.get('avg_speed', 0), 2) if seg.get('state') == 'run' else '',
+                            seg.get('state', '')
+                        ])
+
+                result_file = JOBS_DIR / f'{job_id}.pdf'
+                project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
+                title = f"{project_name} - Trip Report\n{start_date} to {end_date}"
+                content = export_to_pdf(columns, rows, title)
+                result_file.write_bytes(content.getvalue())
+            else:
+                job_manager.fail_job(job_id, f'Invalid format: {format_type}')
+                return
+
+            job_manager.complete_job(job_id, str(result_file))
+
+    except Exception as e:
+        job_manager.fail_job(job_id, str(e))
+
+
+def run_fleet_summary_job(job_id, project_email, start_date, end_date, format_type):
+    """Background worker for fleet summary report generation."""
+    try:
+        with get_db_connection() as executor:
+            user = get_user_by_email(executor, project_email)
+            if not user:
+                job_manager.fail_job(job_id, 'Project not found')
+                return
+
+            # Update progress: starting
+            job_manager.update_progress(job_id, 10, 'processing')
+
+            # Generate fleet summary data with progress callbacks
+            def progress_cb(p):
+                # Map progress 0-1 to 10-80 range
+                job_manager.update_progress(job_id, 10 + int(p * 70), 'processing')
+
+            vehicle_data, global_stats = generate_fleet_summary_data(
+                executor, user['id'], start_date, end_date,
+                progress_callback=progress_cb
+            )
+
+            # Update progress: exporting
+            job_manager.update_progress(job_id, 80, 'exporting')
+
+            # Export to file
+            if format_type == 'csv':
+                result_file = JOBS_DIR / f'{job_id}.csv'
+                content = export_fleet_summary_to_csv(vehicle_data, global_stats, start_date, end_date)
+                result_file.write_text(content)
+            elif format_type == 'excel':
+                result_file = JOBS_DIR / f'{job_id}.xlsx'
+                content = export_fleet_summary_to_excel(vehicle_data, global_stats, start_date, end_date)
+                result_file.write_bytes(content.getvalue())
+            elif format_type == 'pdf':
+                # For PDF, convert to flat table format
+                columns = ['Vehicle Info', 'Start Time', 'Stop Time', 'Driver TimeSheet',
+                           'Total Idle', 'Total Trip', 'Distance', 'H-Accel', 'H-Brake', 'SeatBelt', 'SOS']
+                rows = []
+                for v in vehicle_data:
+                    rows.append([
+                        v['device_name'],
+                        str(v['start_time'])[:19] if v.get('start_time') else '',
+                        str(v['stop_time'])[:19] if v.get('stop_time') else '',
+                        format_hours(v['driver_timesheet']) if v['driver_timesheet'] else '',
+                        format_hours(v['total_idle_time']) if v['total_idle_time'] else 0,
+                        format_hours(v['total_trip_time']) if v['total_trip_time'] else 0,
+                        round(v['total_trip_distance'], 2) if v['total_trip_distance'] else 0,
+                        v['h_acceleration'],
+                        v['h_brake'],
+                        v['seatbelt'],
+                        v['sos']
+                    ])
+
+                result_file = JOBS_DIR / f'{job_id}.pdf'
+                project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
+                title = f"{project_name} - Fleet Summary\n{start_date} to {end_date}"
+                content = export_to_pdf(columns, rows, title)
+                result_file.write_bytes(content.getvalue())
+            else:
+                job_manager.fail_job(job_id, f'Invalid format: {format_type}')
+                return
+
+            job_manager.complete_job(job_id, str(result_file))
+
+    except Exception as e:
+        job_manager.fail_job(job_id, str(e))
+
+
 def login_required(f):
     """Decorator to require authentication for routes."""
     @wraps(f)
@@ -1126,73 +1743,51 @@ def generate_report():
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     safe_name = report_name.replace(' ', '_').replace('/', '_')
 
-    # Special handling for Trip Report
+    # Special handling for Trip Report - use background processing
     if report_id == 10:  # Trip Report
-        try:
-            with get_db_connection() as executor:
-                user = get_user_by_email(executor, project_email)
-                if not user:
-                    return jsonify({'error': 'Project not found'}), 404
+        job_id = job_manager.create_job('trip_report', {
+            'project': project_email,
+            'start_date': start_date,
+            'end_date': end_date,
+            'format': format_type
+        })
 
-                trip_data, global_stats = generate_trip_report_data(
-                    executor, user['id'], start_date, end_date
-                )
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
+        # Start background thread
+        thread = threading.Thread(
+            target=run_trip_report_job,
+            args=(job_id, project_email, start_date, end_date, format_type)
+        )
+        thread.daemon = True
+        thread.start()
 
-        if format_type == 'csv':
-            content = export_trip_report_to_csv(trip_data, global_stats, start_date, end_date)
-            return Response(
-                content,
-                mimetype='text/csv',
-                headers={'Content-Disposition': f'attachment; filename={safe_name}_{start_date}__{end_date}.csv'}
-            )
-        elif format_type == 'excel':
-            content = export_trip_report_to_excel(trip_data, global_stats, start_date, end_date)
-            return send_file(
-                content,
-                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-                as_attachment=True,
-                download_name=f'{safe_name}_{start_date}__{end_date}.xlsx'
-            )
-        elif format_type == 'pdf':
-            # For PDF, convert to flat table format
-            columns = ['Vehicle', 'Start Time', 'Stop Time', 'Duration', 'Location', 'Distance', 'Avg Speed', 'State']
-            rows = []
-            for vehicle in trip_data:
-                for seg in vehicle['segments']:
-                    # Use geofence name if available, otherwise show coordinates
-                    geofence_name = seg.get('geofence')
-                    lat = seg.get('start_lat', 0)
-                    lng = seg.get('start_lng', 0)
-                    if geofence_name:
-                        location = geofence_name
-                    elif lat and lng:
-                        location = f"{lat:.4f}, {lng:.4f}"
-                    else:
-                        location = ''
+        return jsonify({
+            'job_id': job_id,
+            'status': 'queued',
+            'message': 'Trip report generation started in background'
+        })
 
-                    rows.append([
-                        vehicle['device_name'],
-                        str(seg['start_time'])[:19] if seg.get('start_time') else '',
-                        str(seg['stop_time'])[:19] if seg.get('stop_time') else '',
-                        format_duration(seg.get('duration_seconds', 0)),
-                        location,
-                        round(seg.get('distance', 0), 2) if seg.get('state') == 'run' else '',
-                        round(seg.get('avg_speed', 0), 2) if seg.get('state') == 'run' else '',
-                        seg.get('state', '')
-                    ])
-            project_name = PROJECTS.get(project_email, {}).get('name', 'Unknown')
-            title = f"{project_name} - {report_name}\n{start_date} to {end_date}"
-            content = export_to_pdf(columns, rows, title)
-            return send_file(
-                content,
-                mimetype='application/pdf',
-                as_attachment=True,
-                download_name=f'{safe_name}_{start_date}__{end_date}.pdf'
-            )
+    # Special handling for Fleet Summary Report - use background processing
+    if report_id == 11:  # Fleet Summary
+        job_id = job_manager.create_job('fleet_summary', {
+            'project': project_email,
+            'start_date': start_date,
+            'end_date': end_date,
+            'format': format_type
+        })
 
-        return jsonify({'error': 'Invalid format'}), 400
+        # Start background thread
+        thread = threading.Thread(
+            target=run_fleet_summary_job,
+            args=(job_id, project_email, start_date, end_date, format_type)
+        )
+        thread.daemon = True
+        thread.start()
+
+        return jsonify({
+            'job_id': job_id,
+            'status': 'queued',
+            'message': 'Fleet Summary report generation started in background'
+        })
 
     # Standard report handling
     try:
@@ -1228,6 +1823,59 @@ def generate_report():
         )
 
     return jsonify({'error': 'Invalid format'}), 400
+
+
+@app.route('/api/job-status/<job_id>')
+@login_required
+def get_job_status(job_id):
+    """Get status of a background job."""
+    try:
+        status = job_manager.get_status(job_id)
+        return jsonify(status)
+    except FileNotFoundError:
+        return jsonify({'error': 'Job not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/job-download/<job_id>')
+@login_required
+def download_job_result(job_id):
+    """Download completed job result."""
+    try:
+        status = job_manager.get_status(job_id)
+        if status['status'] != 'complete':
+            return jsonify({'error': 'Job not complete'}), 400
+
+        result_file = Path(status['result_file'])
+        if not result_file.exists():
+            return jsonify({'error': 'Result file not found'}), 404
+
+        # Determine MIME type based on extension
+        ext = result_file.suffix.lower()
+        mime_types = {
+            '.csv': 'text/csv',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.pdf': 'application/pdf'
+        }
+        mimetype = mime_types.get(ext, 'application/octet-stream')
+
+        # Generate a better filename
+        params = status.get('params', {})
+        start_date = params.get('start_date', '')
+        end_date = params.get('end_date', '')
+        download_name = f"Trip_Report_{start_date}__{end_date}{ext}"
+
+        return send_file(
+            result_file,
+            mimetype=mimetype,
+            as_attachment=True,
+            download_name=download_name
+        )
+    except FileNotFoundError:
+        return jsonify({'error': 'Job not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/cross-reference')
@@ -1467,6 +2115,61 @@ def preview_report():
                 'total_run_time': format_duration(global_stats['total_duration_run']),
                 'total_idle_time': format_duration(global_stats['total_duration_idle']),
                 'total_parked_time': format_duration(global_stats['total_duration_parked'])
+            }
+        })
+
+    # Special handling for Fleet Summary Report
+    if report_id == 11:
+        try:
+            with get_db_connection() as executor:
+                user = get_user_by_email(executor, project_email)
+                if not user:
+                    return jsonify({'error': 'Project not found'}), 404
+
+                vehicle_data, global_stats = generate_fleet_summary_data(
+                    executor, user['id'], start_date, end_date
+                )
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+        # Format for preview
+        columns = ['Vehicle Info', 'Start Time', 'Stop Time', 'Driver TimeSheet (h)',
+                   'Idle Time (h)', 'Trip Time (h)', 'Trip Distance (km)',
+                   'H-Accel', 'H-Brake', 'SeatBelt', 'SOS']
+        rows = []
+        for v in vehicle_data:
+            rows.append([
+                v['device_name'],
+                str(v['start_time'])[:19] if v.get('start_time') else '',
+                str(v['stop_time'])[:19] if v.get('stop_time') else '',
+                round(format_hours(v['driver_timesheet']), 2) if v['driver_timesheet'] else '',
+                round(format_hours(v['total_idle_time']), 2) if v['total_idle_time'] else 0,
+                round(format_hours(v['total_trip_time']), 2) if v['total_trip_time'] else 0,
+                round(v['total_trip_distance'], 2) if v['total_trip_distance'] else 0,
+                v['h_acceleration'],
+                v['h_brake'],
+                v['seatbelt'],
+                v['sos']
+            ])
+
+        # Calculate pagination
+        total_rows = len(rows)
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paginated_rows = rows[start_idx:end_idx]
+
+        return jsonify({
+            'columns': columns,
+            'data': paginated_rows,
+            'total_rows': total_rows,
+            'page': page,
+            'page_size': page_size,
+            'summary': {
+                'total_vehicles': global_stats['total_vehicles'],
+                'total_seatbelt': global_stats['total_seatbelt'],
+                'total_sos': global_stats['total_sos'],
+                'total_h_brake': global_stats['total_h_brake'],
+                'total_h_accel': global_stats['total_h_accel']
             }
         })
 

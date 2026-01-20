@@ -107,7 +107,7 @@ protocol        VARCHAR      -- 'teltonika'
 id              INT
 device_id       INT          -- FK to devices.id
 type            VARCHAR      -- 'custom', 'speed', 'overspeed', etc.
-message         VARCHAR      -- 'SOS', 'SEATBELT', 'HARSH BREAKING', etc.
+message         VARCHAR      -- 'SOS', 'HarshBreaking', 'HarshAcceleration', etc. (camelCase)
 speed           DOUBLE
 latitude        DOUBLE
 longitude       DOUBLE

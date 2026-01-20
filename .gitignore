@@ -73,3 +73,12 @@ htmlcov/
 
 # Project specific
 # Add any project-specific files or directories here
+
+# Claude Code
+.claude/
+
+# Large generated/data files (uncomment if not needed in repo)
+# unified_devices.json
+# device_project_mapping.json
+# sim_traffic_data.json
+# *.html

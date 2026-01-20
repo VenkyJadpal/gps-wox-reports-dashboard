@@ -191,7 +191,7 @@
                     <label for="end_date" class="block text-sm font-medium" style="color: var(--foreground);">End
                         Date</label>
                     <input type="date" id="end_date" class="w-full px-3 py-2.5 rounded-lg text-sm transition-colors"
-                        style="background: var(--secondary); border: 1px solid var(--border);">
+                        style="background: var(--secondary); border: 1px solid var(--border);" max="">
                 </div>
             </div>
 
@@ -255,6 +255,18 @@
             <div id="loading" class="hidden flex items-center justify-center py-12">
                 <div class="loader mr-3"></div>
                 <span class="text-sm" style="color: var(--muted-foreground);">Loading data...</span>
+            </div>
+
+            <!-- Job Progress Bar (for background report generation) -->
+            <div id="job-progress" class="hidden mb-6 p-4 rounded-lg" style="background: var(--secondary); border: 1px solid var(--border);">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-medium" style="color: var(--foreground);">Generating Trip Report</span>
+                    <span id="job-progress-text" class="text-sm" style="color: var(--muted-foreground);">0% - Starting...</span>
+                </div>
+                <div class="w-full rounded-full h-2" style="background: var(--muted);">
+                    <div id="job-progress-bar" class="h-2 rounded-full bg-blue-600 transition-all duration-300" style="width: 0%"></div>
+                </div>
+                <p id="job-progress-status" class="text-xs mt-2" style="color: var(--muted-foreground);">Processing device data...</p>
             </div>
 
             <!-- Error Message -->
@@ -917,10 +929,37 @@
 
         // Set default dates (last 7 days)
         const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
         const lastWeek = new Date(today);
         lastWeek.setDate(lastWeek.getDate() - 7);
         startDate.value = lastWeek.toISOString().split('T')[0];
-        endDate.value = today.toISOString().split('T')[0];
+        endDate.value = todayStr;
+
+        // Date picker constraints: end date cannot be in the future, start date must be <= end date
+        endDate.max = todayStr;
+        startDate.max = todayStr;
+
+        // Update start date max when end date changes
+        endDate.addEventListener('change', () => {
+            startDate.max = endDate.value || todayStr;
+            // If start date is after end date, reset start date
+            if (startDate.value && endDate.value && startDate.value > endDate.value) {
+                startDate.value = endDate.value;
+            }
+        });
+
+        // Update end date min when start date changes
+        startDate.addEventListener('change', () => {
+            endDate.min = startDate.value || '';
+            // If end date is before start date, reset end date
+            if (startDate.value && endDate.value && endDate.value < startDate.value) {
+                endDate.value = startDate.value;
+            }
+        });
+
+        // Initialize constraints based on default values
+        startDate.max = endDate.value;
+        endDate.min = startDate.value;
 
         // Event Listeners
         projectSelect.addEventListener('change', async () => {
@@ -1150,33 +1189,111 @@
                     })
                 });
 
-                if (!response.ok) {
+                // Check content type to determine how to handle response
+                const contentType = response.headers.get('Content-Type') || '';
+
+                if (contentType.includes('application/json')) {
+                    // JSON response - either a job ID (Trip Report) or an error
                     const data = await response.json();
-                    throw new Error(data.error || 'Failed to generate report');
-                }
 
-                const contentDisposition = response.headers.get('Content-Disposition');
-                let filename = `report.${format === 'excel' ? 'xlsx' : format}`;
-                if (contentDisposition) {
-                    const match = contentDisposition.match(/filename=(.+)/);
-                    if (match) filename = match[1];
-                }
+                    if (data.job_id) {
+                        // Background job started - poll for completion
+                        showLoading(false);
+                        pollJobStatus(data.job_id, format);
+                        return;
+                    }
 
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                a.remove();
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                } else {
+                    // Blob response - direct file download (non-Trip reports)
+                    if (!response.ok) {
+                        throw new Error('Failed to generate report');
+                    }
+
+                    const contentDisposition = response.headers.get('Content-Disposition');
+                    let filename = `report.${format === 'excel' ? 'xlsx' : format}`;
+                    if (contentDisposition) {
+                        const match = contentDisposition.match(/filename=(.+)/);
+                        if (match) filename = match[1];
+                    }
+
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+                }
 
             } catch (err) {
                 showError(err.message);
             } finally {
                 showLoading(false);
             }
+        }
+
+        // Job progress elements
+        const jobProgressDiv = document.getElementById('job-progress');
+        const jobProgressBar = document.getElementById('job-progress-bar');
+        const jobProgressText = document.getElementById('job-progress-text');
+        const jobProgressStatus = document.getElementById('job-progress-status');
+
+        async function pollJobStatus(jobId, format) {
+            // Show progress bar
+            jobProgressDiv.classList.remove('hidden');
+            jobProgressBar.style.width = '0%';
+            jobProgressText.textContent = '0% - Starting...';
+            jobProgressStatus.textContent = 'Initializing...';
+
+            const poll = async () => {
+                try {
+                    const response = await fetch(`/api/job-status/${jobId}`);
+                    const status = await response.json();
+
+                    if (!response.ok) {
+                        throw new Error(status.error || 'Failed to get job status');
+                    }
+
+                    // Update progress bar
+                    jobProgressBar.style.width = `${status.progress}%`;
+                    jobProgressText.textContent = `${status.progress}% - ${status.status}`;
+
+                    // Update status message
+                    if (status.status === 'pending') {
+                        jobProgressStatus.textContent = 'Queued, waiting to start...';
+                    } else if (status.status === 'processing') {
+                        jobProgressStatus.textContent = 'Processing device data...';
+                    } else if (status.status === 'exporting') {
+                        jobProgressStatus.textContent = 'Exporting report file...';
+                    }
+
+                    if (status.status === 'complete') {
+                        jobProgressStatus.textContent = 'Complete! Downloading...';
+                        // Download the file
+                        window.location.href = `/api/job-download/${jobId}`;
+                        // Hide progress bar after a short delay
+                        setTimeout(() => {
+                            jobProgressDiv.classList.add('hidden');
+                        }, 2000);
+                    } else if (status.status === 'failed') {
+                        showError(status.error || 'Report generation failed');
+                        jobProgressDiv.classList.add('hidden');
+                    } else {
+                        // Continue polling every second
+                        setTimeout(poll, 1000);
+                    }
+                } catch (err) {
+                    showError(err.message);
+                    jobProgressDiv.classList.add('hidden');
+                }
+            };
+
+            poll();
         }
 
         // Cross-reference functionality
